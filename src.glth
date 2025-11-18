@@ -100,15 +100,25 @@ defn test28 :: str {
 
 
 
-
-defn greet :: void {
+defn greet-user :: void {
   "Greet the user."
-    display "ciao"; TODO FIX This
+    display test28
 }
 
 
+;; defn max :: a -> a -> a {
+;;     if x <= y then y else x
+;; }
+
+;; defn min :: a -> a -> a {
+;;     if x <= y then x
+;;     else y
+;; }
+
+
+
 defn newline :: void {
-    display "\n"   
+    display '\n'   
 }
 
 ;;; Header comment
@@ -118,7 +128,7 @@ defn main :: i32 {
 docstrings can be as many lines as the user wants."
     ;; Line comment
     {
-        greet; inline comment
+        greet-user; inline comment
         newline
     }    
     return 0

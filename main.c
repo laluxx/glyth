@@ -78,6 +78,8 @@ typedef struct {
 
 typedef struct {
     char *message;
+    char *type; // "string", "char", or "call"
+    char *call_name; // for function calls
 } DisplayNode;
 
 typedef struct {
@@ -165,16 +167,12 @@ static TypeInfo get_type_info(const char *type) {
         info.max_uint = ULLONG_MAX;
     } else if (strcmp(type, "i128") == 0) {
         info.is_signed = true;
-        // i128 min: -2^127 = -170141183460469231731687303715884105728
-        // i128 max: 2^127-1 = 170141183460469231731687303715884105727
-        // We'll use special markers since C doesn't have 128-bit literals
-        info.min_int = LLONG_MIN; // Marker value
-        info.max_int = LLONG_MAX; // Marker value
+        info.min_int = LLONG_MIN;
+        info.max_int = LLONG_MAX;
     } else if (strcmp(type, "u128") == 0) {
         info.is_signed = false;
-        // u128 max: 2^128-1 = 340282366920938463463374607431768211455
         info.min_int = 0;
-        info.max_uint = ULLONG_MAX; // Marker value
+        info.max_uint = ULLONG_MAX;
     } else if (strcmp(type, "f32") == 0) {
         info.is_float = true;
         info.min_float = -3.4028235e38;
@@ -279,6 +277,11 @@ __attribute__((noreturn))
 static void error_at_node(const Cursor *c, const ASTNode *node, const char *msg) {
     fprintf(stderr, "%s:%d:%d: error: %s\n", c->filename, node->line, node->col, msg);
     exit(1);
+}
+
+// Check if character is valid in identifier
+static bool is_ident_char(char c) {
+    return isalnum(c) || c == '_' || c == '-' || c == '>' || c == '?';
 }
 
 // Lexer
@@ -396,7 +399,7 @@ static Token *lex_token(Cursor *c) {
     
     if (isalpha(ch) || ch == '_') {
         const char *ident_start = c->current;
-        while (isalnum(cursor_peek(c)) || cursor_peek(c) == '_') {
+        while (is_ident_char(cursor_peek(c))) {
             cursor_advance(c);
         }
         size_t len = c->current - ident_start;
@@ -553,7 +556,6 @@ static ASTNode *parse_statement(Parser *p) {
                         node->ret.value = strdup(buf);
                         node->ret.type = "float";
                     } else if (strcmp(type_name, "i128") == 0) {
-                        // Return the actual i128 min value as a string
                         node->ret.value = strdup("-170141183460469231731687303715884105728");
                         node->ret.type = "int";
                     } else {
@@ -572,11 +574,9 @@ static ASTNode *parse_statement(Parser *p) {
                         node->ret.value = strdup(buf);
                         node->ret.type = "float";
                     } else if (strcmp(type_name, "i128") == 0) {
-                        // Return the actual i128 max value as a string
                         node->ret.value = strdup("170141183460469231731687303715884105727");
                         node->ret.type = "int";
                     } else if (strcmp(type_name, "u128") == 0) {
-                        // Return the actual u128 max value as a string
                         node->ret.value = strdup("340282366920938463463374607431768211455");
                         node->ret.type = "int";
                     } else if (info.is_signed) {
@@ -640,11 +640,24 @@ static ASTNode *parse_statement(Parser *p) {
         node->col = p->current->col;
         parser_advance(p);
         
-        if (p->current->type != TOK_STRING) {
-            error_at(p->cursor, "expected string after display");
+        if (p->current->type == TOK_STRING) {
+            node->display.message = strdup(p->current->value);
+            node->display.type = "string";
+            node->display.call_name = NULL;
+            parser_advance(p);
+        } else if (p->current->type == TOK_CHAR) {
+            node->display.message = strdup(p->current->value);
+            node->display.type = "char";
+            node->display.call_name = NULL;
+            parser_advance(p);
+        } else if (p->current->type == TOK_IDENT) {
+            node->display.message = NULL;
+            node->display.type = "call";
+            node->display.call_name = strdup(p->current->value);
+            parser_advance(p);
+        } else {
+            error_at(p->cursor, "expected string, character, or function call after display");
         }
-        node->display.message = strdup(p->current->value);
-        parser_advance(p);
         return node;
     }
     
@@ -765,7 +778,7 @@ static void check_return_type(const Cursor *cursor, const ASTNode *func, const A
         error_at_node(cursor, ret_stmt, msg);
     }
     
-    // Check bool returns (already handled above, but keep for explicit bool values)
+    // Check bool returns
     if (func_info.is_bool && strcmp(ret_type, "int") == 0) {
         long long val = atoll(ret_value);
         if (val != 0 && val != 1) {
@@ -780,10 +793,7 @@ static void check_return_type(const Cursor *cursor, const ASTNode *func, const A
     
     // Check integer ranges
     if (strcmp(ret_type, "int") == 0 && !func_info.is_float && !func_info.is_bool) {
-        // For i128 and u128, we need special handling since the values might be beyond long long
         if (strcmp(func_type, "i128") == 0 || strcmp(func_type, "u128") == 0) {
-            // We can't easily validate 128-bit values in C without a big int library
-            // So we'll just trust the parser for now
             return;
         }
         
@@ -798,7 +808,6 @@ static void check_return_type(const Cursor *cursor, const ASTNode *func, const A
                 error_at_node(cursor, ret_stmt, msg);
             }
         } else {
-            // Unsigned type
             if (val < 0) {
                 char msg[256];
                 snprintf(msg, sizeof(msg),
@@ -892,6 +901,7 @@ static char process_char_literal(const char *str) {
 
 static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
                        LLVMTypeRef printf_type, LLVMValueRef printf_func,
+                       LLVMTypeRef putchar_type, LLVMValueRef putchar_func,
                        LLVMValueRef *functions, LLVMTypeRef *function_types,
                        ASTNode **nodes, size_t count,
                        const char *func_ret_type);
@@ -899,20 +909,22 @@ static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
 // Forward declarations for codegen
 static void codegen_block(ASTNode *block, LLVMBuilderRef builder,
                          LLVMTypeRef printf_type, LLVMValueRef printf_func,
+                         LLVMTypeRef putchar_type, LLVMValueRef putchar_func,
                          LLVMValueRef *functions, LLVMTypeRef *function_types,
                          ASTNode **nodes, size_t count, const char *func_ret_type) {
     for (size_t i = 0; i < block->block.stmt_count; i++) {
         codegen_statement(block->block.statements[i], builder, printf_type, printf_func,
-                         functions, function_types, nodes, count, func_ret_type);
+                         putchar_type, putchar_func, functions, function_types, nodes, count, func_ret_type);
     }
 }
 
 static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
                               LLVMTypeRef printf_type, LLVMValueRef printf_func,
+                              LLVMTypeRef putchar_type, LLVMValueRef putchar_func,
                               LLVMValueRef *functions, LLVMTypeRef *function_types,
                               ASTNode **nodes, size_t count, const char *func_ret_type) {
     if (stmt->type == AST_BLOCK) {
-        codegen_block(stmt, builder, printf_type, printf_func,
+        codegen_block(stmt, builder, printf_type, printf_func, putchar_type, putchar_func,
                      functions, function_types, nodes, count, func_ret_type);
     } else if (stmt->type == AST_RETURN) {
         LLVMTypeRef ret_llvm_type = get_llvm_type(func_ret_type);
@@ -926,10 +938,7 @@ static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
             char ch = process_char_literal(stmt->ret.value);
             LLVMBuildRet(builder, LLVMConstInt(LLVMInt8Type(), (unsigned char)ch, false));
         } else if (strcmp(stmt->ret.type, "int") == 0) {
-            // For 128-bit types, we need to handle them specially
             if (strcmp(func_ret_type, "i128") == 0 || strcmp(func_ret_type, "u128") == 0) {
-                // Parse the string into a 128-bit integer
-                // LLVM can handle large integer constants
                 LLVMValueRef val = LLVMConstIntOfString(ret_llvm_type, stmt->ret.value, 10);
                 LLVMBuildRet(builder, val);
             } else {
@@ -947,11 +956,40 @@ static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
             LLVMBuildRet(builder, LLVMConstInt(LLVMInt1Type(), atoi(stmt->ret.value), false));
         }
     } else if (stmt->type == AST_DISPLAY) {
-        char *processed = process_escapes(stmt->display.message);
-        LLVMValueRef str = LLVMBuildGlobalStringPtr(builder, processed, "str");
-        free(processed);
-        LLVMValueRef args[] = { str };
-        LLVMBuildCall2(builder, printf_type, printf_func, args, 1, "");
+        if (strcmp(stmt->display.type, "string") == 0) {
+            char *processed = process_escapes(stmt->display.message);
+            LLVMValueRef str = LLVMBuildGlobalStringPtr(builder, processed, "str");
+            free(processed);
+            LLVMValueRef args[] = { str };
+            LLVMBuildCall2(builder, printf_type, printf_func, args, 1, "");
+        } else if (strcmp(stmt->display.type, "char") == 0) {
+            char ch = process_char_literal(stmt->display.message);
+            LLVMValueRef char_val = LLVMConstInt(LLVMInt32Type(), (unsigned char)ch, false);
+            LLVMValueRef args[] = { char_val };
+            LLVMBuildCall2(builder, putchar_type, putchar_func, args, 1, "");
+        } else if (strcmp(stmt->display.type, "call") == 0) {
+            // Find the function being called
+            for (size_t k = 0; k < count; k++) {
+                if (nodes[k]->type == AST_FUNCTION && 
+                    strcmp(nodes[k]->function.name, stmt->display.call_name) == 0) {
+                    // Call the function
+                    LLVMValueRef result = LLVMBuildCall2(builder, function_types[k], functions[k], NULL, 0, "calltmp");
+                    
+                    // Check return type and display accordingly
+                    const char *ret_type = nodes[k]->function.return_type;
+                    if (strcmp(ret_type, "str") == 0) {
+                        LLVMValueRef args[] = { result };
+                        LLVMBuildCall2(builder, printf_type, printf_func, args, 1, "");
+                    } else if (strcmp(ret_type, "char") == 0) {
+                        // Cast i8 to i32 for putchar
+                        LLVMValueRef char_as_i32 = LLVMBuildZExt(builder, result, LLVMInt32Type(), "chartoi32");
+                        LLVMValueRef args[] = { char_as_i32 };
+                        LLVMBuildCall2(builder, putchar_type, putchar_func, args, 1, "");
+                    }
+                    break;
+                }
+            }
+        }
     } else if (stmt->type == AST_CALL) {
         for (size_t k = 0; k < count; k++) {
             if (nodes[k]->type == AST_FUNCTION && 
@@ -972,6 +1010,11 @@ static void codegen_and_compile(ASTNode **nodes, size_t count, const CompileOpti
     LLVMTypeRef printf_args[] = { LLVMPointerType(LLVMInt8Type(), 0) };
     LLVMTypeRef printf_type = LLVMFunctionType(LLVMInt32Type(), printf_args, 1, true);
     LLVMValueRef printf_func = LLVMAddFunction(module, "printf", printf_type);
+    
+    // Declare putchar
+    LLVMTypeRef putchar_args[] = { LLVMInt32Type() };
+    LLVMTypeRef putchar_type = LLVMFunctionType(LLVMInt32Type(), putchar_args, 1, false);
+    LLVMValueRef putchar_func = LLVMAddFunction(module, "putchar", putchar_type);
     
     // First pass: declare all functions and store their types
     LLVMValueRef *functions = calloc(count, sizeof(LLVMValueRef));
@@ -1001,7 +1044,7 @@ static void codegen_and_compile(ASTNode **nodes, size_t count, const CompileOpti
             
             for (size_t j = 0; j < nodes[i]->function.body_count; j++) {
                 ASTNode *stmt = nodes[i]->function.body[j];
-                codegen_statement(stmt, builder, printf_type, printf_func,
+                codegen_statement(stmt, builder, printf_type, printf_func, putchar_type, putchar_func,
                                 functions, function_types, nodes, count,
                                 nodes[i]->function.return_type);
                 if (stmt->type == AST_RETURN) has_return = true;
