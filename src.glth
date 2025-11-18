@@ -94,9 +94,395 @@ defn test27 :: char {
     return 'a'
 }
 
+; defn test28 :: str {
+;     return "Return strings!"
+; }
+
 defn test28 :: str {
-    return "Return strings!"
+    return "Return " + "concatenated " + "strings!"
 }
+
+
+;;; TESTS
+
+
+defn test-int-add :: i32 {
+    return 10 + 20
+}
+
+defn test-int-sub :: i32 {
+    return 50 - 15
+}
+
+defn test-int-mul :: i32 {
+    return 6 * 7
+}
+
+defn test-int-div :: i32 {
+    return 100 / 4
+}
+
+defn test-int-precedence-1 :: i32 {
+    return 2 + 3 * 4  ; Should be 14
+}
+
+defn test-int-precedence-2 :: i32 {
+    return (2 + 3) * 4  ; Should be 20
+}
+
+defn test-int-complex :: i32 {
+    return 10 + 5 * 2 - 8 / 4  ; Should be 18
+}
+
+
+;;; INTEGER COMPARISON TESTS
+
+defn test-int-eq-true :: bool {
+    return 42 == 42
+}
+
+defn test-int-eq-false :: bool {
+    return 42 == 41
+}
+
+defn test-int-ne-true :: bool {
+    return 42 != 41
+}
+
+defn test-int-ne-false :: bool {
+    return 42 != 42
+}
+
+defn test-int-lt-true :: bool {
+    return 5 < 10
+}
+
+defn test-int-lt-false :: bool {
+    return 10 < 5
+}
+
+defn test-int-le-true-less :: bool {
+    return 5 <= 10
+}
+
+defn test-int-le-true-equal :: bool {
+    return 10 <= 10
+}
+
+defn test-int-le-false :: bool {
+    return 15 <= 10
+}
+
+defn test-int-gt-true :: bool {
+    return 10 > 5
+}
+
+defn test-int-gt-false :: bool {
+    return 5 > 10
+}
+
+defn test-int-ge-true-greater :: bool {
+    return 10 >= 5
+}
+
+defn test-int-ge-true-equal :: bool {
+    return 10 >= 10
+}
+
+defn test-int-ge-false :: bool {
+    return 5 >= 10
+}
+
+;;; FLOAT ARITHMETIC TESTS
+
+
+defn test-float-add :: f32 {
+    return 3.14 + 2.86
+}
+
+;; TODO output: 0x401D333340000000 should be: 0x40E9999A00000000
+;; It should not use f64 precision if the return type is f32
+defn test-float-sub :: f32 {
+    return 10.5 - 3.2
+}
+
+defn test-float-mul :: f32 {
+    return 2.5 * 4.0
+}
+
+defn test-float-div :: f32 {
+    return 10.0 / 2.0
+}
+
+defn test-float-complex :: f32 {
+    return 1.5 + 2.0 * 3.0
+}
+
+;;; FLOAT COMPARISON TESTS
+
+
+defn test-float-eq :: bool {
+    return 3.14 == 3.14
+}
+
+defn test-float-ne :: bool {
+    return 3.14 != 2.71
+}
+
+defn test-float-lt :: bool {
+    return 1.5 < 2.5
+}
+
+defn test-float-le :: bool {
+    return 1.5 <= 1.5
+}
+
+defn test-float-gt :: bool {
+    return 5.0 > 3.0
+}
+
+defn test-float-ge :: bool {
+    return 5.0 >= 5.0
+}
+
+
+;;; CHARACTER ARITHMETIC TESTS (ASCII)
+
+
+defn test-char-add :: char {
+    return 'A' + 'B'  ; ASCII: 65 + 66 = 131
+}
+
+defn test-char-sub :: char {
+    return 'z' - 'a'  ; ASCII: 122 - 97 = 25
+}
+
+defn test-char-mul :: char {
+    return 'A' * '\n'  ; Just testing it compiles
+}
+
+defn test-char-div :: char {
+    return 'd' / '\n'
+}
+
+
+;;; CHARACTER COMPARISON TESTS
+
+
+defn test-char-eq-true :: bool {
+    return 'a' == 'a'
+}
+
+defn test-char-eq-false :: bool {
+    return 'a' == 'b'
+}
+
+defn test-char-ne :: bool {
+    return 'x' != 'y'
+}
+
+defn test-char-lt :: bool {
+    return 'a' < 'z'
+}
+
+defn test-char-le :: bool {
+    return 'a' <= 'a'
+}
+
+defn test-char-gt :: bool {
+    return 'Z' > 'A'
+}
+
+defn test-char-ge :: bool {
+    return 'z' >= 'a'
+}
+
+;;; BOOLEAN OPERATIONS TESTS
+
+defn test-bool-add-tt :: bool {
+    return true + true  ; true OR true = true
+}
+
+defn test-bool-add-tf :: bool {
+    return true + false  ; true OR false = true
+}
+
+defn test-bool-add-ff :: bool {
+    return false + false  ; false OR false = false
+}
+
+defn test-bool-sub-tt :: bool {
+    return true - true  ; true AND NOT true = false
+}
+
+defn test-bool-sub-tf :: bool {
+    return true - false  ; true AND NOT false = true
+}
+
+defn test-bool-sub-ft :: bool {
+    return false - true  ; false AND NOT true = false
+}
+
+defn test-bool-sub-ff :: bool {
+    return false - false  ; false AND NOT false = false
+}
+
+;; TODO
+; defn test-bool-mult-int :: bool {
+;     return false * 3
+; }
+
+;; TODO
+; defn test-bool-div-int :: bool {
+;     return false * 3
+; }
+
+
+;;; BOOLEAN COMPARISON TESTS
+
+
+defn test-bool-eq-tt :: bool {
+    return true == true
+}
+
+defn test-bool-eq-ff :: bool {
+    return false == false
+}
+
+defn test-bool-eq-tf :: bool {
+    return true == false
+}
+
+defn test-bool-ne :: bool {
+    return true != false
+}
+
+defn test-bool-lt :: bool {
+    return false < true  ; 0 < 1 = true
+}
+
+defn test-bool-le :: bool {
+    return true <= true
+}
+
+defn test-bool-gt :: bool {
+    return true > false
+}
+
+defn test-bool-ge :: bool {
+    return false >= false
+}
+
+
+;;; STRING OPERATIONS TESTS
+
+
+;; TODO This should be done entirely at comptime
+defn test-string-concat-2 :: str {
+    return "Hello" + " World"
+}
+
+defn test-string-concat-3 :: str {
+    return "One" + "Two" + "Three"
+}
+
+defn test-string-concat-4 :: str {
+    return "A" + "B" + "C" + "D"
+}
+
+;; FIXME Doesn’t work at all. And should be at comptime
+defn test-string-remove :: str {
+    return "HelloWorldHello" - "Hello"
+}
+
+;; TODO We should remove 3 characters from the end of the string
+defn test-string-int :: str {
+    return "HelloWorldHello" - 3
+}
+
+;; TODO We should support * operator between string and int
+;; this should become "HelloHelloHello"
+; defn test-string-mult-string :: str {
+;     return "Hello" * 3
+; }
+
+
+;;; STRING COMPARISON TESTS
+
+;; NOTE We could use the same string constant
+;; for both operands (string pooling).
+;; Or even better constant-fold the entire comparison to true
+defn test-string-eq-true :: bool {
+    return "test" == "test"
+}
+
+defn test-string-eq-false :: bool {
+    return "test" == "best"
+}
+
+defn test-string-ne :: bool {
+    return "foo" != "bar"
+}
+
+;; NOTE We check buffer sizes instead of doing
+;; Lexicographical comparison because this is a low
+;; level language, you’d work with buffers more
+;; than sorting ugly menu entries
+
+defn test-string-lt :: bool {
+    return "hi" < "hello"  ; Length: 2 < 5
+}
+
+defn test-string-le :: bool {
+    return "test" <= "test"  ; Length: 4 <= 4
+}
+
+defn test-string-gt :: bool {
+    return "longer" > "long"  ; Length: 6 > 4
+}
+
+defn test-string-ge :: bool {
+    return "same" >= "same"  ; Length: 4 >= 4
+}
+
+
+;;; MIXED PRECEDENCE TESTS
+
+
+defn test-precedence-1 :: i32 {
+    return 1 + 2 * 3 + 4  ; Should be 11
+}
+
+defn test-precedence-2 :: i32 {
+    return (1 + 2) * (3 + 4)  ; Should be 21
+}
+
+defn test-precedence-3 :: i32 {
+    return 20 / 4 + 3 * 2  ; Should be 11
+}
+
+;; FIXME It’s applying > before + (3 > 6) => false
+defn test-precedence-4 :: bool {
+    return 5 + 3 > 6  ; Should be true (8 > 6)
+}
+
+defn test-precedence-5 :: bool {
+    return 10 - 5 == 5  ; Should be true
+}
+
+;; FIXME It’s applying < before - (6 < 10) => false
+defn test-precedence-6 :: bool {
+    return 2 * 3 < 10 - 3  ; Should be true (6 < 7)
+}
+
+
+
+
+
+
+
+
+
 
 
 
@@ -106,6 +492,7 @@ defn greet-user :: void {
 }
 
 
+;; NOTE min and max can’t compile yet
 ;; defn max :: a -> a -> a {
 ;;     if x <= y then y else x
 ;; }

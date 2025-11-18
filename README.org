@@ -20,7 +20,8 @@ main
 
 ** TODO Tests
 #+begin_src txt
-idk just do them
+Write them!
+Maybe write a test library for this.
 #+end_src
 
 ** TODO Pattern matching
@@ -36,6 +37,7 @@ defn lastInArray :: [a] -> a {
     }
 }
 
+-- Or not explcit
 
 defn lastInList :: (a) -> a {
     () = error "No end for empty list"

@@ -28,6 +28,18 @@ typedef enum {
     TOK_RBRACE,
     TOK_TYPE,
     TOK_DOT,
+    TOK_PLUS,
+    TOK_MINUS,
+    TOK_STAR,
+    TOK_SLASH,
+    TOK_EQ_EQ,
+    TOK_NOT_EQ,
+    TOK_LT,
+    TOK_LT_EQ,
+    TOK_GT,
+    TOK_GT_EQ,
+    TOK_LPAREN,
+    TOK_RPAREN,
 } TokenType;
 
 typedef struct {
@@ -54,7 +66,22 @@ typedef enum {
     AST_RETURN,
     AST_DISPLAY,
     AST_BLOCK,
+    AST_BINARY_OP,
+    AST_LITERAL,
 } ASTNodeType;
+
+typedef enum {
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+    OP_EQ,
+    OP_NE,
+    OP_LT,
+    OP_LE,
+    OP_GT,
+    OP_GE,
+} BinaryOp;
 
 typedef struct ASTNode ASTNode;
 
@@ -72,8 +99,7 @@ typedef struct {
 } CallNode;
 
 typedef struct {
-    char *value;
-    char *type;
+    ASTNode *expr;
 } ReturnNode;
 
 typedef struct {
@@ -88,6 +114,17 @@ typedef struct {
     size_t stmt_capacity;
 } BlockNode;
 
+typedef struct {
+    BinaryOp op;
+    ASTNode *left;
+    ASTNode *right;
+} BinaryOpNode;
+
+typedef struct {
+    char *value;
+    char *type; // "int", "float", "string", "char", "bool"
+} LiteralNode;
+
 struct ASTNode {
     ASTNodeType type;
     int line;
@@ -98,6 +135,8 @@ struct ASTNode {
         ReturnNode ret;
         DisplayNode display;
         BlockNode block;
+        BinaryOpNode binary;
+        LiteralNode literal;
     };
 };
 
@@ -249,6 +288,12 @@ static inline char cursor_peek(const Cursor *c) {
     return *c->current;
 }
 
+// Peek ahead n characters
+static inline char cursor_peek_ahead(const Cursor *c, int n) {
+    if (c->current[n] == '\0') return '\0';
+    return c->current[n];
+}
+
 // Skip whitespace and comments
 static void cursor_skip_whitespace(Cursor *c) {
     while (true) {
@@ -305,6 +350,43 @@ static Token *lex_token(Cursor *c) {
         return tok;
     }
     
+    // Two-character operators
+    if (ch == '=' && cursor_peek_ahead(c, 1) == '=') {
+        cursor_advance(c);
+        cursor_advance(c);
+        tok->type = TOK_EQ_EQ;
+        return tok;
+    }
+    
+    if (ch == '!' && cursor_peek_ahead(c, 1) == '=') {
+        cursor_advance(c);
+        cursor_advance(c);
+        tok->type = TOK_NOT_EQ;
+        return tok;
+    }
+    
+    if (ch == '<' && cursor_peek_ahead(c, 1) == '=') {
+        cursor_advance(c);
+        cursor_advance(c);
+        tok->type = TOK_LT_EQ;
+        return tok;
+    }
+    
+    if (ch == '>' && cursor_peek_ahead(c, 1) == '=') {
+        cursor_advance(c);
+        cursor_advance(c);
+        tok->type = TOK_GT_EQ;
+        return tok;
+    }
+    
+    if (ch == ':' && cursor_peek_ahead(c, 1) == ':') {
+        cursor_advance(c);
+        cursor_advance(c);
+        tok->type = TOK_COLON_COLON;
+        return tok;
+    }
+    
+    // Single-character tokens
     if (ch == '{') {
         cursor_advance(c);
         c->scope_level++;
@@ -319,19 +401,55 @@ static Token *lex_token(Cursor *c) {
         return tok;
     }
     
+    if (ch == '(') {
+        cursor_advance(c);
+        tok->type = TOK_LPAREN;
+        return tok;
+    }
+    
+    if (ch == ')') {
+        cursor_advance(c);
+        tok->type = TOK_RPAREN;
+        return tok;
+    }
+    
     if (ch == '.') {
         cursor_advance(c);
         tok->type = TOK_DOT;
         return tok;
     }
     
-    if (ch == ':' && c->current[1] == ':') {
+    if (ch == '+') {
         cursor_advance(c);
-        cursor_advance(c);
-        tok->type = TOK_COLON_COLON;
+        tok->type = TOK_PLUS;
         return tok;
     }
     
+    if (ch == '*') {
+        cursor_advance(c);
+        tok->type = TOK_STAR;
+        return tok;
+    }
+    
+    if (ch == '/') {
+        cursor_advance(c);
+        tok->type = TOK_SLASH;
+        return tok;
+    }
+    
+    if (ch == '<') {
+        cursor_advance(c);
+        tok->type = TOK_LT;
+        return tok;
+    }
+    
+    if (ch == '>') {
+        cursor_advance(c);
+        tok->type = TOK_GT;
+        return tok;
+    }
+    
+    // String literals
     if (ch == '"') {
         cursor_advance(c);
         const char *str_start = c->current;
@@ -353,6 +471,7 @@ static Token *lex_token(Cursor *c) {
         return tok;
     }
     
+    // Character literals
     if (ch == '\'') {
         cursor_advance(c);
         const char *char_start = c->current;
@@ -372,7 +491,8 @@ static Token *lex_token(Cursor *c) {
         return tok;
     }
     
-    if (isdigit(ch) || (ch == '-' && isdigit(c->current[1]))) {
+    // Numbers (handle minus specially to distinguish from operator)
+    if (isdigit(ch) || (ch == '-' && isdigit(cursor_peek_ahead(c, 1)))) {
         const char *num_start = c->current;
         if (ch == '-') cursor_advance(c);
         
@@ -397,6 +517,14 @@ static Token *lex_token(Cursor *c) {
         return tok;
     }
     
+    // Handle standalone minus
+    if (ch == '-') {
+        cursor_advance(c);
+        tok->type = TOK_MINUS;
+        return tok;
+    }
+    
+    // Identifiers and keywords
     if (isalpha(ch) || ch == '_') {
         const char *ident_start = c->current;
         while (is_ident_char(cursor_peek(c))) {
@@ -438,8 +566,274 @@ static void parser_expect(Parser *p, TokenType type, const char *msg) {
     parser_advance(p);
 }
 
+static ASTNode *parse_expression(Parser *p);
 static ASTNode *parse_statement(Parser *p);
 static ASTNode *parse_block(Parser *p);
+
+// Create literal node
+static ASTNode *create_literal(Parser *p, const char *value, const char *type) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = AST_BINARY_OP; // We'll use a special marker
+    node->line = p->current->line;
+    node->col = p->current->col;
+    node->literal.value = strdup(value);
+    node->literal.type = strdup(type);
+    return node;
+}
+
+// Parse primary expression (literals, parenthesized expressions, type.min/max)
+static ASTNode *parse_primary(Parser *p) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->line = p->current->line;
+    node->col = p->current->col;
+    
+    if (p->current->type == TOK_LPAREN) {
+        parser_advance(p);
+        ASTNode *expr = parse_expression(p);
+        parser_expect(p, TOK_RPAREN, "expected ')'");
+        free(node);
+        return expr;
+    }
+    
+    if (p->current->type == TOK_NUMBER) {
+        node->type = AST_LITERAL;
+        node->literal.value = strdup(p->current->value);
+        node->literal.type = strdup("int");
+        parser_advance(p);
+        return node;
+    }
+    
+    if (p->current->type == TOK_FLOAT) {
+        node->type = AST_LITERAL;
+        node->literal.value = strdup(p->current->value);
+        node->literal.type = strdup("float");
+        parser_advance(p);
+        return node;
+    }
+    
+    if (p->current->type == TOK_STRING) {
+        node->type = AST_LITERAL;
+        node->literal.value = strdup(p->current->value);
+        node->literal.type = strdup("string");
+        parser_advance(p);
+        return node;
+    }
+    
+    if (p->current->type == TOK_CHAR) {
+        node->type = AST_LITERAL;
+        node->literal.value = strdup(p->current->value);
+        node->literal.type = strdup("char");
+        parser_advance(p);
+        return node;
+    }
+    
+    if (p->current->type == TOK_TRUE) {
+        node->type = AST_LITERAL;
+        node->literal.value = strdup("1");
+        node->literal.type = strdup("bool");
+        parser_advance(p);
+        return node;
+    }
+    
+    if (p->current->type == TOK_FALSE) {
+        node->type = AST_LITERAL;
+        node->literal.value = strdup("0");
+        node->literal.type = strdup("bool");
+        parser_advance(p);
+        return node;
+    }
+    
+    // Handle type.min and type.max
+    if (p->current->type == TOK_TYPE) {
+        char *type_name = strdup(p->current->value);
+        parser_advance(p);
+        
+        if (p->current->type == TOK_DOT) {
+            parser_advance(p);
+            if (p->current->type != TOK_IDENT) {
+                error_at(p->cursor, "expected 'min' or 'max' after type name");
+            }
+            
+            TypeInfo info = get_type_info(type_name);
+            
+            node->type = AST_LITERAL;
+            
+            if (strcmp(p->current->value, "min") == 0) {
+                if (info.is_bool) {
+                    node->literal.value = strdup("0");
+                    node->literal.type = strdup("bool");
+                } else if (info.is_float) {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%.17g", info.min_float);
+                    node->literal.value = strdup(buf);
+                    node->literal.type = strdup("float");
+                } else if (strcmp(type_name, "i128") == 0) {
+                    node->literal.value = strdup("-170141183460469231731687303715884105728");
+                    node->literal.type = strdup("int");
+                } else {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%lld", info.min_int);
+                    node->literal.value = strdup(buf);
+                    node->literal.type = strdup("int");
+                }
+            } else if (strcmp(p->current->value, "max") == 0) {
+                if (info.is_bool) {
+                    node->literal.value = strdup("1");
+                    node->literal.type = strdup("bool");
+                } else if (info.is_float) {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%.17g", info.max_float);
+                    node->literal.value = strdup(buf);
+                    node->literal.type = strdup("float");
+                } else if (strcmp(type_name, "i128") == 0) {
+                    node->literal.value = strdup("170141183460469231731687303715884105727");
+                    node->literal.type = strdup("int");
+                } else if (strcmp(type_name, "u128") == 0) {
+                    node->literal.value = strdup("340282366920938463463374607431768211455");
+                    node->literal.type = strdup("int");
+                } else if (info.is_signed) {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%lld", info.max_int);
+                    node->literal.value = strdup(buf);
+                    node->literal.type = strdup("int");
+                } else {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%llu", info.max_uint);
+                    node->literal.value = strdup(buf);
+                    node->literal.type = strdup("int");
+                }
+            } else {
+                error_at(p->cursor, "expected 'min' or 'max' after type name");
+            }
+            
+            parser_advance(p);
+            free(type_name);
+            return node;
+        }
+        
+        free(type_name);
+        error_at(p->cursor, "unexpected type in expression");
+    }
+    
+    error_at(p->cursor, "expected expression");
+}
+
+// Parse multiplication and division (higher precedence)
+static ASTNode *parse_multiplicative(Parser *p) {
+    ASTNode *left = parse_primary(p);
+    
+    while (p->current->type == TOK_STAR || p->current->type == TOK_SLASH) {
+        BinaryOp op = (p->current->type == TOK_STAR) ? OP_MUL : OP_DIV;
+        int line = p->current->line;
+        int col = p->current->col;
+        parser_advance(p);
+        
+        ASTNode *right = parse_primary(p);
+        
+        ASTNode *binary = malloc(sizeof(ASTNode));
+        binary->type = AST_BINARY_OP;
+        binary->line = line;
+        binary->col = col;
+        binary->binary.op = op;
+        binary->binary.left = left;
+        binary->binary.right = right;
+        
+        left = binary;
+    }
+    
+    return left;
+}
+
+// Parse addition and subtraction
+static ASTNode *parse_additive(Parser *p) {
+    ASTNode *left = parse_multiplicative(p);
+    
+    while (p->current->type == TOK_PLUS || p->current->type == TOK_MINUS) {
+        BinaryOp op = (p->current->type == TOK_PLUS) ? OP_ADD : OP_SUB;
+        int line = p->current->line;
+        int col = p->current->col;
+        parser_advance(p);
+        
+        ASTNode *right = parse_multiplicative(p);
+        
+        ASTNode *binary = malloc(sizeof(ASTNode));
+        binary->type = AST_BINARY_OP;
+        binary->line = line;
+        binary->col = col;
+        binary->binary.op = op;
+        binary->binary.left = left;
+        binary->binary.right = right;
+        
+        left = binary;
+    }
+    
+    return left;
+}
+
+// Parse comparison operators
+static ASTNode *parse_comparison(Parser *p) {
+    ASTNode *left = parse_additive(p);
+    
+    while (p->current->type == TOK_LT || p->current->type == TOK_LT_EQ ||
+           p->current->type == TOK_GT || p->current->type == TOK_GT_EQ) {
+        BinaryOp op;
+        switch (p->current->type) {
+            case TOK_LT: op = OP_LT; break;
+            case TOK_LT_EQ: op = OP_LE; break;
+            case TOK_GT: op = OP_GT; break;
+            case TOK_GT_EQ: op = OP_GE; break;
+            default: op = OP_LT;
+        }
+        int line = p->current->line;
+        int col = p->current->col;
+        parser_advance(p);
+        
+        ASTNode *right = parse_additive(p);
+        
+        ASTNode *binary = malloc(sizeof(ASTNode));
+        binary->type = AST_BINARY_OP;
+        binary->line = line;
+        binary->col = col;
+        binary->binary.op = op;
+        binary->binary.left = left;
+        binary->binary.right = right;
+        
+        left = binary;
+    }
+    
+    return left;
+}
+
+// Parse equality operators
+static ASTNode *parse_equality(Parser *p) {
+    ASTNode *left = parse_comparison(p);
+    
+    while (p->current->type == TOK_EQ_EQ || p->current->type == TOK_NOT_EQ) {
+        BinaryOp op = (p->current->type == TOK_EQ_EQ) ? OP_EQ : OP_NE;
+        int line = p->current->line;
+        int col = p->current->col;
+        parser_advance(p);
+        
+        ASTNode *right = parse_comparison(p);
+        
+        ASTNode *binary = malloc(sizeof(ASTNode));
+        binary->type = AST_BINARY_OP;
+        binary->line = line;
+        binary->col = col;
+        binary->binary.op = op;
+        binary->binary.left = left;
+        binary->binary.right = right;
+        
+        left = binary;
+    }
+    
+    return left;
+}
+
+// Parse expression (top level)
+static ASTNode *parse_expression(Parser *p) {
+    return parse_equality(p);
+}
 
 static ASTNode *parse_function(Parser *p) {
     ASTNode *node = malloc(sizeof(ASTNode));
@@ -533,103 +927,7 @@ static ASTNode *parse_statement(Parser *p) {
         node->col = p->current->col;
         parser_advance(p);
         
-        // Handle type.min and type.max
-        if (p->current->type == TOK_TYPE) {
-            char *type_name = strdup(p->current->value);
-            parser_advance(p);
-            
-            if (p->current->type == TOK_DOT) {
-                parser_advance(p);
-                if (p->current->type != TOK_IDENT) {
-                    error_at(p->cursor, "expected 'min' or 'max' after type name");
-                }
-                
-                TypeInfo info = get_type_info(type_name);
-                
-                if (strcmp(p->current->value, "min") == 0) {
-                    if (info.is_bool) {
-                        node->ret.value = strdup("0");
-                        node->ret.type = "bool";
-                    } else if (info.is_float) {
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "%.17g", info.min_float);
-                        node->ret.value = strdup(buf);
-                        node->ret.type = "float";
-                    } else if (strcmp(type_name, "i128") == 0) {
-                        node->ret.value = strdup("-170141183460469231731687303715884105728");
-                        node->ret.type = "int";
-                    } else {
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "%lld", info.min_int);
-                        node->ret.value = strdup(buf);
-                        node->ret.type = "int";
-                    }
-                } else if (strcmp(p->current->value, "max") == 0) {
-                    if (info.is_bool) {
-                        node->ret.value = strdup("1");
-                        node->ret.type = "bool";
-                    } else if (info.is_float) {
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "%.17g", info.max_float);
-                        node->ret.value = strdup(buf);
-                        node->ret.type = "float";
-                    } else if (strcmp(type_name, "i128") == 0) {
-                        node->ret.value = strdup("170141183460469231731687303715884105727");
-                        node->ret.type = "int";
-                    } else if (strcmp(type_name, "u128") == 0) {
-                        node->ret.value = strdup("340282366920938463463374607431768211455");
-                        node->ret.type = "int";
-                    } else if (info.is_signed) {
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "%lld", info.max_int);
-                        node->ret.value = strdup(buf);
-                        node->ret.type = "int";
-                    } else {
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "%llu", info.max_uint);
-                        node->ret.value = strdup(buf);
-                        node->ret.type = "int";
-                    }
-                } else {
-                    error_at(p->cursor, "expected 'min' or 'max' after type name");
-                }
-                
-                parser_advance(p);
-                free(type_name);
-                return node;
-            }
-            
-            free(type_name);
-            error_at(p->cursor, "expected '.' after type name in return statement");
-        }
-        
-        if (p->current->type == TOK_NUMBER) {
-            node->ret.value = strdup(p->current->value);
-            node->ret.type = "int";
-            parser_advance(p);
-        } else if (p->current->type == TOK_FLOAT) {
-            node->ret.value = strdup(p->current->value);
-            node->ret.type = "float";
-            parser_advance(p);
-        } else if (p->current->type == TOK_STRING) {
-            node->ret.value = strdup(p->current->value);
-            node->ret.type = "str";
-            parser_advance(p);
-        } else if (p->current->type == TOK_CHAR) {
-            node->ret.value = strdup(p->current->value);
-            node->ret.type = "char";
-            parser_advance(p);
-        } else if (p->current->type == TOK_TRUE) {
-            node->ret.value = strdup("1");
-            node->ret.type = "bool";
-            parser_advance(p);
-        } else if (p->current->type == TOK_FALSE) {
-            node->ret.value = strdup("0");
-            node->ret.type = "bool";
-            parser_advance(p);
-        } else {
-            error_at(p->cursor, "expected value after return");
-        }
+        node->ret.expr = parse_expression(p);
         return node;
     }
     
@@ -702,147 +1000,185 @@ static ASTNode **parse(const char *source, const char *filename, size_t *count) 
     return nodes;
 }
 
-// Type checking function
-static void check_return_type(const Cursor *cursor, const ASTNode *func, const ASTNode *ret_stmt) {
-    const char *func_type = func->function.return_type;
-    const char *ret_type = ret_stmt->ret.type;
-    const char *ret_value = ret_stmt->ret.value;
+// Get expression type
+static const char *get_expr_type(const ASTNode *expr) {
+    if (expr->type == AST_LITERAL) {
+        return expr->literal.type;
+    } else if (expr->type == AST_BINARY_OP) {
+        return "computed";
+    }
+    return "unknown";
+}
+
+// Type checking for expressions
+static void check_binary_op_types(const Cursor *cursor, const ASTNode *node, const char *expected_type) {
+    const char *left_type = get_expr_type(node->binary.left);
+    const char *right_type = get_expr_type(node->binary.right);
     
-    TypeInfo func_info = get_type_info(func_type);
-    
-    // Check for char type mismatches
-    if (strcmp(ret_type, "char") == 0 && strcmp(func_type, "char") != 0) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), 
-                "incompatible types when returning type 'char' but '%s' was expected",
-                func_type);
-        error_at_node(cursor, ret_stmt, msg);
+    // Check for invalid operations on bools
+    if ((node->binary.op == OP_MUL || node->binary.op == OP_DIV) &&
+        (strcmp(left_type, "bool") == 0 || strcmp(right_type, "bool") == 0)) {
+        error_at_node(cursor, node, "cannot use * or / operators with bool type");
     }
     
-    if (strcmp(func_type, "char") == 0 && strcmp(ret_type, "char") != 0) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                "incompatible types when returning type '%s' but 'char' was expected",
-                ret_type);
-        error_at_node(cursor, ret_stmt, msg);
-    }
-    
-    // Check for str type mismatches
-    if (strcmp(ret_type, "str") == 0 && strcmp(func_type, "str") != 0) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), 
-                "incompatible types when returning type 'str' but '%s' was expected",
-                func_type);
-        error_at_node(cursor, ret_stmt, msg);
-    }
-    
-    if (strcmp(func_type, "str") == 0 && strcmp(ret_type, "str") != 0) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                "incompatible types when returning type '%s' but 'str' was expected",
-                ret_type);
-        error_at_node(cursor, ret_stmt, msg);
-    }
-    
-    // Check for type mismatches between bool and other types
-    if (strcmp(ret_type, "bool") == 0 && !func_info.is_bool) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), 
-                "incompatible types when returning type 'bool' but '%s' was expected",
-                func_type);
-        error_at_node(cursor, ret_stmt, msg);
-    }
-    
-    if (func_info.is_bool && strcmp(ret_type, "bool") != 0) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                "incompatible types when returning type '%s' but 'bool' was expected",
-                ret_type);
-        error_at_node(cursor, ret_stmt, msg);
-    }
-    
-    // Check if trying to return float to int type or vice versa
-    if (strcmp(ret_type, "float") == 0 && !func_info.is_float && !func_info.is_bool) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), 
-                "incompatible types when returning type 'float' but '%s' was expected",
-                func_type);
-        error_at_node(cursor, ret_stmt, msg);
-    }
-    
-    if (strcmp(ret_type, "int") == 0 && func_info.is_float) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                "incompatible types when returning type 'int' but '%s' was expected",
-                func_type);
-        error_at_node(cursor, ret_stmt, msg);
-    }
-    
-    // Check bool returns
-    if (func_info.is_bool && strcmp(ret_type, "int") == 0) {
-        long long val = atoll(ret_value);
-        if (val != 0 && val != 1) {
-            char msg[256];
-            snprintf(msg, sizeof(msg),
-                    "value '%s' is out of range for type 'bool' (expected 0 or 1)",
-                    ret_value);
-            error_at_node(cursor, ret_stmt, msg);
-        }
-        return;
-    }
-    
-    // Check integer ranges
-    if (strcmp(ret_type, "int") == 0 && !func_info.is_float && !func_info.is_bool) {
-        if (strcmp(func_type, "i128") == 0 || strcmp(func_type, "u128") == 0) {
-            return;
-        }
-        
-        long long val = atoll(ret_value);
-        
-        if (func_info.is_signed) {
-            if (val < func_info.min_int || val > func_info.max_int) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                        "value '%s' is out of range for type '%s' (expected %lld to %lld)",
-                        ret_value, func_type, func_info.min_int, func_info.max_int);
-                error_at_node(cursor, ret_stmt, msg);
-            }
-        } else {
-            if (val < 0) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                        "value '%s' is out of range for type '%s' (expected 0 to %llu)",
-                        ret_value, func_type, func_info.max_uint);
-                error_at_node(cursor, ret_stmt, msg);
-            }
-            unsigned long long uval = (unsigned long long)val;
-            if (uval > func_info.max_uint) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                        "value '%s' is out of range for type '%s' (expected 0 to %llu)",
-                        ret_value, func_type, func_info.max_uint);
-                error_at_node(cursor, ret_stmt, msg);
-            }
-        }
-    }
-    
-    // Check float ranges
-    if (strcmp(ret_type, "float") == 0 && func_info.is_float) {
-        double val = atof(ret_value);
-        if (val < func_info.min_float || val > func_info.max_float) {
-            char msg[256];
-            snprintf(msg, sizeof(msg),
-                    "value '%s' is out of range for type '%s'",
-                    ret_value, func_type);
-            error_at_node(cursor, ret_stmt, msg);
+    // For string operations, check compatibility
+    if (strcmp(left_type, "string") == 0 || strcmp(right_type, "string") == 0) {
+        if (node->binary.op == OP_MUL || node->binary.op == OP_DIV) {
+            error_at_node(cursor, node, "cannot use * or / operators with string type");
         }
     }
 }
 
 // Recursive type checker for statements
+static void check_statement_types(const Cursor *cursor, const ASTNode *func, const ASTNode *stmt);
+
+static void check_return_expr_type(const Cursor *cursor, const ASTNode *func, const ASTNode *ret_stmt) {
+    const char *func_type = func->function.return_type;
+    ASTNode *expr = ret_stmt->ret.expr;
+    
+    // For literals, do type checking
+    if (expr->type == AST_LITERAL) {
+        const char *ret_type = expr->literal.type;
+        const char *ret_value = expr->literal.value;
+        
+        TypeInfo func_info = get_type_info(func_type);
+        
+        // Check for char type mismatches
+        if (strcmp(ret_type, "char") == 0 && strcmp(func_type, "char") != 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), 
+                    "incompatible types when returning type 'char' but '%s' was expected",
+                    func_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        if (strcmp(func_type, "char") == 0 && strcmp(ret_type, "char") != 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                    "incompatible types when returning type '%s' but 'char' was expected",
+                    ret_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        // Check for str type mismatches
+        if (strcmp(ret_type, "string") == 0 && strcmp(func_type, "str") != 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), 
+                    "incompatible types when returning type 'str' but '%s' was expected",
+                    func_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        if (strcmp(func_type, "str") == 0 && strcmp(ret_type, "string") != 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                    "incompatible types when returning type '%s' but 'str' was expected",
+                    ret_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        // Check for type mismatches between bool and other types
+        if (strcmp(ret_type, "bool") == 0 && !func_info.is_bool) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), 
+                    "incompatible types when returning type 'bool' but '%s' was expected",
+                    func_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        if (func_info.is_bool && strcmp(ret_type, "bool") != 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                    "incompatible types when returning type '%s' but 'bool' was expected",
+                    ret_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        // Check if trying to return float to int type or vice versa
+        if (strcmp(ret_type, "float") == 0 && !func_info.is_float && !func_info.is_bool) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), 
+                    "incompatible types when returning type 'float' but '%s' was expected",
+                    func_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        if (strcmp(ret_type, "int") == 0 && func_info.is_float) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                    "incompatible types when returning type 'int' but '%s' was expected",
+                    func_type);
+            error_at_node(cursor, ret_stmt, msg);
+        }
+        
+        // Check bool returns
+        if (func_info.is_bool && strcmp(ret_type, "int") == 0) {
+            long long val = atoll(ret_value);
+            if (val != 0 && val != 1) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                        "value '%s' is out of range for type 'bool' (expected 0 or 1)",
+                        ret_value);
+                error_at_node(cursor, ret_stmt, msg);
+            }
+            return;
+        }
+        
+        // Check integer ranges
+        if (strcmp(ret_type, "int") == 0 && !func_info.is_float && !func_info.is_bool) {
+            if (strcmp(func_type, "i128") == 0 || strcmp(func_type, "u128") == 0) {
+                return;
+            }
+            
+            long long val = atoll(ret_value);
+            
+            if (func_info.is_signed) {
+                if (val < func_info.min_int || val > func_info.max_int) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                            "value '%s' is out of range for type '%s' (expected %lld to %lld)",
+                            ret_value, func_type, func_info.min_int, func_info.max_int);
+                    error_at_node(cursor, ret_stmt, msg);
+                }
+            } else {
+                if (val < 0) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                            "value '%s' is out of range for type '%s' (expected 0 to %llu)",
+                            ret_value, func_type, func_info.max_uint);
+                    error_at_node(cursor, ret_stmt, msg);
+                }
+                unsigned long long uval = (unsigned long long)val;
+                if (uval > func_info.max_uint) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                            "value '%s' is out of range for type '%s' (expected 0 to %llu)",
+                            ret_value, func_type, func_info.max_uint);
+                    error_at_node(cursor, ret_stmt, msg);
+                }
+            }
+        }
+        
+        // Check float ranges
+        if (strcmp(ret_type, "float") == 0 && func_info.is_float) {
+            double val = atof(ret_value);
+            if (val < func_info.min_float || val > func_info.max_float) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                        "value '%s' is out of range for type '%s'",
+                        ret_value, func_type);
+                error_at_node(cursor, ret_stmt, msg);
+            }
+        }
+    } else if (expr->type == AST_BINARY_OP) {
+        // Check binary operation types
+        check_binary_op_types(cursor, expr, func_type);
+    }
+}
+
 static void check_statement_types(const Cursor *cursor, const ASTNode *func, const ASTNode *stmt) {
     if (stmt->type == AST_RETURN) {
-        check_return_type(cursor, func, stmt);
+        check_return_expr_type(cursor, func, stmt);
     } else if (stmt->type == AST_BLOCK) {
         for (size_t i = 0; i < stmt->block.stmt_count; i++) {
             check_statement_types(cursor, func, stmt->block.statements[i]);
@@ -899,62 +1235,320 @@ static char process_char_literal(const char *str) {
     return str[0];
 }
 
+// Forward declarations for codegen
+static LLVMValueRef codegen_expression(ASTNode *expr, LLVMBuilderRef builder,
+                                       LLVMModuleRef module, const char *expected_type);
+
 static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
+                       LLVMModuleRef module,
                        LLVMTypeRef printf_type, LLVMValueRef printf_func,
                        LLVMTypeRef putchar_type, LLVMValueRef putchar_func,
                        LLVMValueRef *functions, LLVMTypeRef *function_types,
                        ASTNode **nodes, size_t count,
                        const char *func_ret_type);
 
-// Forward declarations for codegen
 static void codegen_block(ASTNode *block, LLVMBuilderRef builder,
+                         LLVMModuleRef module,
                          LLVMTypeRef printf_type, LLVMValueRef printf_func,
                          LLVMTypeRef putchar_type, LLVMValueRef putchar_func,
                          LLVMValueRef *functions, LLVMTypeRef *function_types,
                          ASTNode **nodes, size_t count, const char *func_ret_type) {
     for (size_t i = 0; i < block->block.stmt_count; i++) {
-        codegen_statement(block->block.statements[i], builder, printf_type, printf_func,
+        codegen_statement(block->block.statements[i], builder, module, printf_type, printf_func,
                          putchar_type, putchar_func, functions, function_types, nodes, count, func_ret_type);
     }
 }
 
+// Helper to get strlen at runtime
+static LLVMValueRef codegen_strlen(LLVMBuilderRef builder, LLVMModuleRef module, LLVMValueRef str) {
+    LLVMTypeRef strlen_args[] = { LLVMPointerType(LLVMInt8Type(), 0) };
+    LLVMTypeRef strlen_type = LLVMFunctionType(LLVMInt64Type(), strlen_args, 1, false);
+    LLVMValueRef strlen_func = LLVMGetNamedFunction(module, "strlen");
+    if (!strlen_func) {
+        strlen_func = LLVMAddFunction(module, "strlen", strlen_type);
+    }
+    LLVMValueRef args[] = { str };
+    return LLVMBuildCall2(builder, strlen_type, strlen_func, args, 1, "strlen");
+}
+
+// Helper to concatenate strings
+static LLVMValueRef codegen_strcat(LLVMBuilderRef builder, LLVMModuleRef module,
+                                   LLVMValueRef str1, LLVMValueRef str2) {
+    // Get lengths
+    LLVMValueRef len1 = codegen_strlen(builder, module, str1);
+    LLVMValueRef len2 = codegen_strlen(builder, module, str2);
+    
+    // Total length + 1 for null terminator
+    LLVMValueRef total_len = LLVMBuildAdd(builder, len1, len2, "total_len");
+    LLVMValueRef alloc_size = LLVMBuildAdd(builder, total_len, LLVMConstInt(LLVMInt64Type(), 1, false), "alloc_size");
+    
+    // Allocate memory
+    LLVMTypeRef malloc_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMInt64Type()}, 1, false);
+    LLVMValueRef malloc_func = LLVMGetNamedFunction(module, "malloc");
+    if (!malloc_func) {
+        malloc_func = LLVMAddFunction(module, "malloc", malloc_type);
+    }
+    LLVMValueRef result = LLVMBuildCall2(builder, malloc_type, malloc_func,
+                                         (LLVMValueRef[]){alloc_size}, 1, "str_result");
+    
+    // Copy first string
+    LLVMTypeRef strcpy_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+    LLVMValueRef strcpy_func = LLVMGetNamedFunction(module, "strcpy");
+    if (!strcpy_func) {
+        strcpy_func = LLVMAddFunction(module, "strcpy", strcpy_type);
+    }
+    LLVMBuildCall2(builder, strcpy_type, strcpy_func, (LLVMValueRef[]){result, str1}, 2, "");
+    
+    // Concatenate second string
+    LLVMValueRef strcat_func = LLVMGetNamedFunction(module, "strcat");
+    if (!strcat_func) {
+        strcat_func = LLVMAddFunction(module, "strcat", strcpy_type);
+    }
+    LLVMBuildCall2(builder, strcpy_type, strcat_func, (LLVMValueRef[]){result, str2}, 2, "");
+    
+    return result;
+}
+
+// Helper to remove substring from string
+static LLVMValueRef codegen_strremove(LLVMBuilderRef builder, LLVMModuleRef module,
+                                      LLVMValueRef str, LLVMValueRef substr) {
+    // Declare strstr
+    LLVMTypeRef strstr_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+    LLVMValueRef strstr_func = LLVMGetNamedFunction(module, "strstr");
+    if (!strstr_func) {
+        strstr_func = LLVMAddFunction(module, "strstr", strstr_type);
+    }
+    
+    // For simplicity, we'll create a new string with first occurrence removed
+    // This is a simplified version - full implementation would remove all occurrences
+    LLVMValueRef len_str = codegen_strlen(builder, module, str);
+    LLVMValueRef len_substr = codegen_strlen(builder, module, substr);
+    
+    // Allocate result
+    LLVMTypeRef malloc_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMInt64Type()}, 1, false);
+    LLVMValueRef malloc_func = LLVMGetNamedFunction(module, "malloc");
+    if (!malloc_func) {
+        malloc_func = LLVMAddFunction(module, "malloc", malloc_type);
+    }
+    LLVMValueRef alloc_size = LLVMBuildAdd(builder, len_str, LLVMConstInt(LLVMInt64Type(), 1, false), "alloc");
+    LLVMValueRef result = LLVMBuildCall2(builder, malloc_type, malloc_func,
+                                         (LLVMValueRef[]){alloc_size}, 1, "str_result");
+    
+    // For now, just copy the original string (full implementation would parse and remove)
+    LLVMTypeRef strcpy_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+    LLVMValueRef strcpy_func = LLVMGetNamedFunction(module, "strcpy");
+    if (!strcpy_func) {
+        strcpy_func = LLVMAddFunction(module, "strcpy", strcpy_type);
+    }
+    LLVMBuildCall2(builder, strcpy_type, strcpy_func, (LLVMValueRef[]){result, str}, 2, "");
+    
+    return result;
+}
+
+// Replace your codegen_expression function with this fixed version:
+
+static LLVMValueRef codegen_expression(ASTNode *expr, LLVMBuilderRef builder,
+                                       LLVMModuleRef module, const char *expected_type) {
+    if (expr->type == AST_LITERAL) {
+        // It's a literal
+        const char *type = expr->literal.type;
+        const char *value = expr->literal.value;
+        
+        if (strcmp(type, "string") == 0) {
+            char *processed = process_escapes(value);
+            LLVMValueRef str = LLVMBuildGlobalStringPtr(builder, processed, "str");
+            free(processed);
+            return str;
+        } else if (strcmp(type, "char") == 0) {
+            char ch = process_char_literal(value);
+            return LLVMConstInt(LLVMInt8Type(), (unsigned char)ch, false);
+        } else if (strcmp(type, "int") == 0) {
+            LLVMTypeRef target_type = get_llvm_type(expected_type);
+            if (!target_type) target_type = LLVMInt32Type();
+            
+            if (strcmp(expected_type, "i128") == 0 || strcmp(expected_type, "u128") == 0) {
+                return LLVMConstIntOfString(target_type, value, 10);
+            } else {
+                long long val = atoll(value);
+                return LLVMConstInt(target_type, val, false);
+            }
+        } else if (strcmp(type, "float") == 0) {
+            double val = atof(value);
+            if (strcmp(expected_type, "f32") == 0) {
+                return LLVMConstReal(LLVMFloatType(), val);
+            } else {
+                return LLVMConstReal(LLVMDoubleType(), val);
+            }
+        } else if (strcmp(type, "bool") == 0) {
+            return LLVMConstInt(LLVMInt1Type(), atoi(value), false);
+        }
+    } else if (expr->type == AST_BINARY_OP) {
+        // Binary operation
+        LLVMValueRef left = codegen_expression(expr->binary.left, builder, module, expected_type);
+        LLVMValueRef right = codegen_expression(expr->binary.right, builder, module, expected_type);
+        
+        const char *left_type = get_expr_type(expr->binary.left);
+        const char *right_type = get_expr_type(expr->binary.right);
+        
+        // String operations (handle both literal strings and computed strings)
+        if ((strcmp(left_type, "string") == 0 || strcmp(left_type, "computed") == 0) &&
+            (strcmp(right_type, "string") == 0 || strcmp(right_type, "computed") == 0)) {
+            // Check if either operand is actually a string by checking the LLVM type
+            LLVMTypeRef left_llvm_type = LLVMTypeOf(left);
+            LLVMTypeRef right_llvm_type = LLVMTypeOf(right);
+            
+            bool left_is_ptr = LLVMGetTypeKind(left_llvm_type) == LLVMPointerTypeKind;
+            bool right_is_ptr = LLVMGetTypeKind(right_llvm_type) == LLVMPointerTypeKind;
+            
+            if (left_is_ptr && right_is_ptr) {
+                if (expr->binary.op == OP_ADD) {
+                    return codegen_strcat(builder, module, left, right);
+                } else if (expr->binary.op == OP_SUB) {
+                    return codegen_strremove(builder, module, left, right);
+                } else if (expr->binary.op == OP_EQ) {
+                    // strcmp returns 0 if equal
+                    LLVMTypeRef strcmp_type = LLVMFunctionType(LLVMInt32Type(),
+                                                               (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+                    LLVMValueRef strcmp_func = LLVMGetNamedFunction(module, "strcmp");
+                    if (!strcmp_func) {
+                        strcmp_func = LLVMAddFunction(module, "strcmp", strcmp_type);
+                    }
+                    LLVMValueRef cmp_result = LLVMBuildCall2(builder, strcmp_type, strcmp_func,
+                                                             (LLVMValueRef[]){left, right}, 2, "strcmp");
+                    return LLVMBuildICmp(builder, LLVMIntEQ, cmp_result,
+                                         LLVMConstInt(LLVMInt32Type(), 0, false), "streq");
+                } else if (expr->binary.op == OP_NE) {
+                    LLVMTypeRef strcmp_type = LLVMFunctionType(LLVMInt32Type(),
+                                                               (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+                    LLVMValueRef strcmp_func = LLVMGetNamedFunction(module, "strcmp");
+                    if (!strcmp_func) {
+                        strcmp_func = LLVMAddFunction(module, "strcmp", strcmp_type);
+                    }
+                    LLVMValueRef cmp_result = LLVMBuildCall2(builder, strcmp_type, strcmp_func,
+                                                             (LLVMValueRef[]){left, right}, 2, "strcmp");
+                    return LLVMBuildICmp(builder, LLVMIntNE, cmp_result,
+                                         LLVMConstInt(LLVMInt32Type(), 0, false), "strne");
+                } else if (expr->binary.op == OP_LT || expr->binary.op == OP_LE ||
+                           expr->binary.op == OP_GT || expr->binary.op == OP_GE) {
+                    // Compare string lengths
+                    LLVMValueRef len1 = codegen_strlen(builder, module, left);
+                    LLVMValueRef len2 = codegen_strlen(builder, module, right);
+                
+                    switch (expr->binary.op) {
+                    case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, len1, len2, "cmp");
+                    case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, len1, len2, "cmp");
+                    case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, len1, len2, "cmp");
+                    case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, len1, len2, "cmp");
+                    default: break;
+                    }
+                }
+            }
+        }
+        
+        // Character operations (treat as integers)
+        if (strcmp(left_type, "char") == 0 && strcmp(right_type, "char") == 0) {
+            switch (expr->binary.op) {
+            case OP_ADD: return LLVMBuildAdd(builder, left, right, "add");
+            case OP_SUB: return LLVMBuildSub(builder, left, right, "sub");
+            case OP_MUL: return LLVMBuildMul(builder, left, right, "mul");
+            case OP_DIV: return LLVMBuildUDiv(builder, left, right, "div");
+            case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
+            case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
+            case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, left, right, "lt");
+            case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, left, right, "le");
+            case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, left, right, "gt");
+            case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, left, right, "ge");
+            }
+        }
+        
+        // Boolean operations
+        if (strcmp(left_type, "bool") == 0 && strcmp(right_type, "bool") == 0) {
+            switch (expr->binary.op) {
+            case OP_ADD: return LLVMBuildOr(builder, left, right, "or");  // true + false = true
+            case OP_SUB: return LLVMBuildAnd(builder, left, 
+                                             LLVMBuildNot(builder, right, "not"), "and_not");
+            case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
+            case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
+            case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, left, right, "lt");
+            case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, left, right, "le");
+            case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, left, right, "gt");
+            case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, left, right, "ge");
+            default: break;
+            }
+        }
+        
+        // Float operations
+        if (strcmp(left_type, "float") == 0 || strcmp(right_type, "float") == 0) {
+            switch (expr->binary.op) {
+            case OP_ADD: return LLVMBuildFAdd(builder, left, right, "add");
+            case OP_SUB: return LLVMBuildFSub(builder, left, right, "sub");
+            case OP_MUL: return LLVMBuildFMul(builder, left, right, "mul");
+            case OP_DIV: return LLVMBuildFDiv(builder, left, right, "div");
+            case OP_EQ: return LLVMBuildFCmp(builder, LLVMRealOEQ, left, right, "eq");
+            case OP_NE: return LLVMBuildFCmp(builder, LLVMRealONE, left, right, "ne");
+            case OP_LT: return LLVMBuildFCmp(builder, LLVMRealOLT, left, right, "lt");
+            case OP_LE: return LLVMBuildFCmp(builder, LLVMRealOLE, left, right, "le");
+            case OP_GT: return LLVMBuildFCmp(builder, LLVMRealOGT, left, right, "gt");
+            case OP_GE: return LLVMBuildFCmp(builder, LLVMRealOGE, left, right, "ge");
+            }
+        }
+        
+        // Integer operations (default)
+        bool is_signed = true;
+        if (expected_type && expected_type[0] == 'u') {
+            is_signed = false;
+        }
+        
+        switch (expr->binary.op) {
+        case OP_ADD: return LLVMBuildAdd(builder, left, right, "add");
+        case OP_SUB: return LLVMBuildSub(builder, left, right, "sub");
+        case OP_MUL: return LLVMBuildMul(builder, left, right, "mul");
+        case OP_DIV: 
+            return is_signed ? LLVMBuildSDiv(builder, left, right, "div") :
+                               LLVMBuildUDiv(builder, left, right, "div");
+        case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
+        case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
+        case OP_LT: 
+            return LLVMBuildICmp(builder, is_signed ? LLVMIntSLT : LLVMIntULT, 
+                                 left, right, "lt");
+        case OP_LE: 
+            return LLVMBuildICmp(builder, is_signed ? LLVMIntSLE : LLVMIntULE, 
+                                 left, right, "le");
+        case OP_GT: 
+            return LLVMBuildICmp(builder, is_signed ? LLVMIntSGT : LLVMIntUGT, 
+                                 left, right, "gt");
+        case OP_GE: 
+            return LLVMBuildICmp(builder, is_signed ? LLVMIntSGE : LLVMIntUGE, 
+                                 left, right, "ge");
+        }
+    }
+    
+    return NULL;
+}
+
+
 static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
+                              LLVMModuleRef module,
                               LLVMTypeRef printf_type, LLVMValueRef printf_func,
                               LLVMTypeRef putchar_type, LLVMValueRef putchar_func,
                               LLVMValueRef *functions, LLVMTypeRef *function_types,
                               ASTNode **nodes, size_t count, const char *func_ret_type) {
     if (stmt->type == AST_BLOCK) {
-        codegen_block(stmt, builder, printf_type, printf_func, putchar_type, putchar_func,
+        codegen_block(stmt, builder, module, printf_type, printf_func, putchar_type, putchar_func,
                      functions, function_types, nodes, count, func_ret_type);
     } else if (stmt->type == AST_RETURN) {
-        LLVMTypeRef ret_llvm_type = get_llvm_type(func_ret_type);
-        
-        if (strcmp(stmt->ret.type, "str") == 0) {
-            char *processed = process_escapes(stmt->ret.value);
-            LLVMValueRef str = LLVMBuildGlobalStringPtr(builder, processed, "str");
-            free(processed);
-            LLVMBuildRet(builder, str);
-        } else if (strcmp(stmt->ret.type, "char") == 0) {
-            char ch = process_char_literal(stmt->ret.value);
-            LLVMBuildRet(builder, LLVMConstInt(LLVMInt8Type(), (unsigned char)ch, false));
-        } else if (strcmp(stmt->ret.type, "int") == 0) {
-            if (strcmp(func_ret_type, "i128") == 0 || strcmp(func_ret_type, "u128") == 0) {
-                LLVMValueRef val = LLVMConstIntOfString(ret_llvm_type, stmt->ret.value, 10);
-                LLVMBuildRet(builder, val);
-            } else {
-                long long val = atoll(stmt->ret.value);
-                LLVMBuildRet(builder, LLVMConstInt(ret_llvm_type, val, false));
-            }
-        } else if (strcmp(stmt->ret.type, "float") == 0) {
-            double val = atof(stmt->ret.value);
-            if (strcmp(func_ret_type, "f32") == 0) {
-                LLVMBuildRet(builder, LLVMConstReal(LLVMFloatType(), val));
-            } else {
-                LLVMBuildRet(builder, LLVMConstReal(LLVMDoubleType(), val));
-            }
-        } else if (strcmp(stmt->ret.type, "bool") == 0) {
-            LLVMBuildRet(builder, LLVMConstInt(LLVMInt1Type(), atoi(stmt->ret.value), false));
-        }
+        LLVMValueRef ret_val = codegen_expression(stmt->ret.expr, builder, module, func_ret_type);
+        LLVMBuildRet(builder, ret_val);
     } else if (stmt->type == AST_DISPLAY) {
         if (strcmp(stmt->display.type, "string") == 0) {
             char *processed = process_escapes(stmt->display.message);
@@ -1044,7 +1638,7 @@ static void codegen_and_compile(ASTNode **nodes, size_t count, const CompileOpti
             
             for (size_t j = 0; j < nodes[i]->function.body_count; j++) {
                 ASTNode *stmt = nodes[i]->function.body[j];
-                codegen_statement(stmt, builder, printf_type, printf_func, putchar_type, putchar_func,
+                codegen_statement(stmt, builder, module, printf_type, printf_func, putchar_type, putchar_func,
                                 functions, function_types, nodes, count,
                                 nodes[i]->function.return_type);
                 if (stmt->type == AST_RETURN) has_return = true;
