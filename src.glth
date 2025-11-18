@@ -1,0 +1,125 @@
+defn test1 :: u8 {
+    return u8.min
+
+}
+defn test2 :: u8 {
+    return u8.max
+}
+
+defn test3 :: i8 {
+    return i8.min
+}
+defn test4 :: i8 {
+    return i8.max
+}
+
+defn test5 :: u16 {
+    return u16.min
+}
+defn test6 :: u16 {
+    return u16.max
+}
+
+defn test7 :: i16 {
+    return i16.min
+}
+defn test8 :: i16 {
+    return i16.max
+}
+
+defn test9 :: u32 {
+    return u32.min
+}
+defn test10 :: u32 {
+    return u32.max
+}
+
+defn test11 :: i32 {
+    return i32.min
+}
+defn test12 :: i32 {
+    return i32.max
+}
+
+defn test13 :: u64 {
+    return u64.min
+}
+defn test14 :: u64 {
+    return u64.max
+}
+
+defn test15 :: i64 {
+    return i64.min
+}
+defn test16 :: u64 {
+    return i64.max
+}
+
+defn test17 :: u128 {
+    return u128.min
+}
+defn test18 :: u128 {
+    return u128.max
+}
+
+defn test19 :: i128 {
+    return i128.min
+}
+defn test20 :: i128 {
+    return i128.max
+}
+
+defn test21 :: f32 {
+    return f32.min
+}
+defn test22 :: f32 {
+    return f32.max
+}
+
+defn test23 :: f64 {
+    return f64.min
+}
+defn test24 :: f64 {
+    return f64.max
+}
+
+defn test25 :: bool {
+    return bool.min
+}
+defn test26 :: bool {
+    return bool.max
+}
+
+defn test27 :: char {
+    return 'a'
+}
+
+defn test28 :: str {
+    return "Return strings!"
+}
+
+
+
+
+defn greet :: void {
+  "Greet the user."
+    display "ciao"; TODO FIX This
+}
+
+
+defn newline :: void {
+    display "\n"   
+}
+
+;;; Header comment
+
+defn main :: i32 {
+  "main is the entry point of our program.
+docstrings can be as many lines as the user wants."
+    ;; Line comment
+    {
+        greet; inline comment
+        newline
+    }    
+    return 0
+}

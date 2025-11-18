@@ -1,0 +1,45 @@
+#+TITLE: Glyth lang
+#+AUTHOR: Laluxx
+
+* Compile
+#+begin_src shell
+make clean && make && ./glyth src.glth -o myprogram --emit-all && ./myprogram 
+#+end_src
+
+
+* Features
+** TODO Repl
+#+begin_src txt
+-repl flag to enter repl after compiling
+or to enter repl on an executable
+
+display main.docstring
+main
+
+#+end_src
+
+** TODO Tests
+#+begin_src txt
+idk just do them
+#+end_src
+
+** TODO Pattern matching
+#+begin_src haskell
+
+-- We could either have explicit matching
+
+defn lastInArray :: [a] -> a {
+    match [a] {
+        [] = error "No end for empty array"
+        [x] = x
+        [_:tail] =  lastInArray tail
+    }
+}
+
+
+defn lastInList :: (a) -> a {
+    () = error "No end for empty list"
+    (x) = x
+    (_:tail) =  lastInList tail
+}
+#+end_src
