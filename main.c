@@ -311,7 +311,7 @@ static void cursor_skip_whitespace(Cursor *c) {
     }
 }
 
-// Error reporting (C-style for Emacs compatibility)
+// Error reporting (Compatible with Emacs *compilation buffer*)
 __attribute__((noreturn))
 static void error_at(const Cursor *c, const char *msg) {
     fprintf(stderr, "%s:%d:%d: error: %s\n", c->filename, c->line, c->col, msg);
@@ -580,6 +580,8 @@ static ASTNode *create_literal(Parser *p, const char *value, const char *type) {
     node->literal.type = strdup(type);
     return node;
 }
+
+
 
 // Parse primary expression (literals, parenthesized expressions, type.min/max)
 static ASTNode *parse_primary(Parser *p) {
@@ -1010,21 +1012,22 @@ static const char *get_expr_type(const ASTNode *expr) {
     return "unknown";
 }
 
-// Type checking for expressions
+
 static void check_binary_op_types(const Cursor *cursor, const ASTNode *node, const char *expected_type) {
     const char *left_type = get_expr_type(node->binary.left);
     const char *right_type = get_expr_type(node->binary.right);
     
-    // Check for invalid operations on bools
-    if ((node->binary.op == OP_MUL || node->binary.op == OP_DIV) &&
-        (strcmp(left_type, "bool") == 0 || strcmp(right_type, "bool") == 0)) {
-        error_at_node(cursor, node, "cannot use * or / operators with bool type");
+    // Only disallow / with strings
+    if (node->binary.op == OP_DIV) {
+        if (strcmp(left_type, "string") == 0 || strcmp(right_type, "string") == 0) {
+            error_at_node(cursor, node, "cannot use / operator with string type");
+        }
     }
     
-    // For string operations, check compatibility
-    if (strcmp(left_type, "string") == 0 || strcmp(right_type, "string") == 0) {
-        if (node->binary.op == OP_MUL || node->binary.op == OP_DIV) {
-            error_at_node(cursor, node, "cannot use * or / operators with string type");
+    // For string operations with *, only allow string * int
+    if (node->binary.op == OP_MUL) {
+        if (strcmp(left_type, "string") == 0 && strcmp(right_type, "string") == 0) {
+            error_at_node(cursor, node, "cannot use * operator between two strings");
         }
     }
 }
@@ -1312,35 +1315,142 @@ static LLVMValueRef codegen_strcat(LLVMBuilderRef builder, LLVMModuleRef module,
     return result;
 }
 
-// Helper to remove substring from string
-static LLVMValueRef codegen_strremove(LLVMBuilderRef builder, LLVMModuleRef module,
-                                      LLVMValueRef str, LLVMValueRef substr) {
-    // Declare strstr
-    LLVMTypeRef strstr_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
-                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
-                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
-    LLVMValueRef strstr_func = LLVMGetNamedFunction(module, "strstr");
-    if (!strstr_func) {
-        strstr_func = LLVMAddFunction(module, "strstr", strstr_type);
-    }
+// Helper to repeat a string N times (string * int)
+static LLVMValueRef codegen_strrepeat(LLVMBuilderRef builder, LLVMModuleRef module,
+                                      LLVMValueRef str, LLVMValueRef count) {
+    // Get string length
+    LLVMValueRef str_len = codegen_strlen(builder, module, str);
     
-    // For simplicity, we'll create a new string with first occurrence removed
-    // This is a simplified version - full implementation would remove all occurrences
-    LLVMValueRef len_str = codegen_strlen(builder, module, str);
-    LLVMValueRef len_substr = codegen_strlen(builder, module, substr);
+    // Total length = str_len * count
+    LLVMValueRef total_len = LLVMBuildMul(builder, str_len, count, "total_len");
     
-    // Allocate result
+    // Allocate memory (total_len + 1 for null terminator)
+    LLVMValueRef alloc_size = LLVMBuildAdd(builder, total_len, 
+                                           LLVMConstInt(LLVMInt64Type(), 1, false), "alloc_size");
+    
     LLVMTypeRef malloc_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
                                                 (LLVMTypeRef[]){LLVMInt64Type()}, 1, false);
     LLVMValueRef malloc_func = LLVMGetNamedFunction(module, "malloc");
     if (!malloc_func) {
         malloc_func = LLVMAddFunction(module, "malloc", malloc_type);
     }
-    LLVMValueRef alloc_size = LLVMBuildAdd(builder, len_str, LLVMConstInt(LLVMInt64Type(), 1, false), "alloc");
     LLVMValueRef result = LLVMBuildCall2(builder, malloc_type, malloc_func,
                                          (LLVMValueRef[]){alloc_size}, 1, "str_result");
     
-    // For now, just copy the original string (full implementation would parse and remove)
+    // Set first byte to null terminator
+    LLVMBuildStore(builder, LLVMConstInt(LLVMInt8Type(), 0, false), result);
+    
+    // Create loop to concatenate string N times
+    LLVMValueRef func = LLVMGetBasicBlockParent(LLVMGetInsertBlock(builder));
+    LLVMBasicBlockRef loop_cond = LLVMAppendBasicBlock(func, "loop.cond");
+    LLVMBasicBlockRef loop_body = LLVMAppendBasicBlock(func, "loop.body");
+    LLVMBasicBlockRef loop_end = LLVMAppendBasicBlock(func, "loop.end");
+    
+    // Allocate counter
+    LLVMValueRef counter_ptr = LLVMBuildAlloca(builder, LLVMInt64Type(), "counter");
+    LLVMBuildStore(builder, LLVMConstInt(LLVMInt64Type(), 0, false), counter_ptr);
+    
+    LLVMBuildBr(builder, loop_cond);
+    
+    // Loop condition
+    LLVMPositionBuilderAtEnd(builder, loop_cond);
+    LLVMValueRef counter_val = LLVMBuildLoad2(builder, LLVMInt64Type(), counter_ptr, "counter_val");
+    LLVMValueRef cond = LLVMBuildICmp(builder, LLVMIntSLT, counter_val, count, "cond");
+    LLVMBuildCondBr(builder, cond, loop_body, loop_end);
+    
+    // Loop body - concatenate string
+    LLVMPositionBuilderAtEnd(builder, loop_body);
+    LLVMTypeRef strcat_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+    LLVMValueRef strcat_func = LLVMGetNamedFunction(module, "strcat");
+    if (!strcat_func) {
+        strcat_func = LLVMAddFunction(module, "strcat", strcat_type);
+    }
+    LLVMBuildCall2(builder, strcat_type, strcat_func, (LLVMValueRef[]){result, str}, 2, "");
+    
+    // Increment counter
+    LLVMValueRef next_counter = LLVMBuildAdd(builder, counter_val, 
+                                             LLVMConstInt(LLVMInt64Type(), 1, false), "next");
+    LLVMBuildStore(builder, next_counter, counter_ptr);
+    LLVMBuildBr(builder, loop_cond);
+    
+    // After loop
+    LLVMPositionBuilderAtEnd(builder, loop_end);
+    
+    return result;
+}
+
+// Helper to remove N characters from end of string (string - int)
+static LLVMValueRef codegen_strtrim(LLVMBuilderRef builder, LLVMModuleRef module,
+                                    LLVMValueRef str, LLVMValueRef n) {
+    // Get string length
+    LLVMValueRef str_len = codegen_strlen(builder, module, str);
+    
+    // New length = max(0, str_len - n)
+    LLVMValueRef new_len = LLVMBuildSub(builder, str_len, n, "new_len");
+    
+    // Clamp to 0 if negative
+    LLVMValueRef zero = LLVMConstInt(LLVMInt64Type(), 0, false);
+    LLVMValueRef is_negative = LLVMBuildICmp(builder, LLVMIntSLT, new_len, zero, "is_neg");
+    new_len = LLVMBuildSelect(builder, is_negative, zero, new_len, "clamped_len");
+    
+    // Allocate new string
+    LLVMValueRef alloc_size = LLVMBuildAdd(builder, new_len, 
+                                           LLVMConstInt(LLVMInt64Type(), 1, false), "alloc_size");
+    
+    LLVMTypeRef malloc_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMInt64Type()}, 1, false);
+    LLVMValueRef malloc_func = LLVMGetNamedFunction(module, "malloc");
+    if (!malloc_func) {
+        malloc_func = LLVMAddFunction(module, "malloc", malloc_type);
+    }
+    LLVMValueRef result = LLVMBuildCall2(builder, malloc_type, malloc_func,
+                                         (LLVMValueRef[]){alloc_size}, 1, "str_result");
+    
+    // Use strncpy to copy first new_len characters
+    LLVMTypeRef strncpy_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                 (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                                LLVMPointerType(LLVMInt8Type(), 0),
+                                                                LLVMInt64Type()}, 3, false);
+    LLVMValueRef strncpy_func = LLVMGetNamedFunction(module, "strncpy");
+    if (!strncpy_func) {
+        strncpy_func = LLVMAddFunction(module, "strncpy", strncpy_type);
+    }
+    LLVMBuildCall2(builder, strncpy_type, strncpy_func, 
+                   (LLVMValueRef[]){result, str, new_len}, 3, "");
+    
+    // Add null terminator
+    LLVMValueRef null_pos = LLVMBuildGEP2(builder, LLVMInt8Type(), result, 
+                                          (LLVMValueRef[]){new_len}, 1, "null_pos");
+    LLVMBuildStore(builder, LLVMConstInt(LLVMInt8Type(), 0, false), null_pos);
+    
+    return result;
+}
+
+// Helper to add N spaces to the end of a string (string + int)
+static LLVMValueRef codegen_strpad(LLVMBuilderRef builder, LLVMModuleRef module,
+                                   LLVMValueRef str, LLVMValueRef n) {
+    // Get string length
+    LLVMValueRef str_len = codegen_strlen(builder, module, str);
+    
+    // Total length = str_len + n
+    LLVMValueRef total_len = LLVMBuildAdd(builder, str_len, n, "total_len");
+    
+    // Allocate memory (total_len + 1 for null terminator)
+    LLVMValueRef alloc_size = LLVMBuildAdd(builder, total_len, 
+                                           LLVMConstInt(LLVMInt64Type(), 1, false), "alloc_size");
+    
+    LLVMTypeRef malloc_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMInt64Type()}, 1, false);
+    LLVMValueRef malloc_func = LLVMGetNamedFunction(module, "malloc");
+    if (!malloc_func) {
+        malloc_func = LLVMAddFunction(module, "malloc", malloc_type);
+    }
+    LLVMValueRef result = LLVMBuildCall2(builder, malloc_type, malloc_func,
+                                         (LLVMValueRef[]){alloc_size}, 1, "str_result");
+    
+    // Copy original string
     LLVMTypeRef strcpy_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
                                                 (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
                                                                LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
@@ -1350,15 +1460,153 @@ static LLVMValueRef codegen_strremove(LLVMBuilderRef builder, LLVMModuleRef modu
     }
     LLVMBuildCall2(builder, strcpy_type, strcpy_func, (LLVMValueRef[]){result, str}, 2, "");
     
+    // Fill the rest with spaces
+    LLVMValueRef space_start = LLVMBuildGEP2(builder, LLVMInt8Type(), result,
+                                             (LLVMValueRef[]){str_len}, 1, "space_start");
+    
+    // Use memset to fill with spaces
+    LLVMTypeRef memset_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMInt32Type(),
+                                                               LLVMInt64Type()}, 3, false);
+    LLVMValueRef memset_func = LLVMGetNamedFunction(module, "memset");
+    if (!memset_func) {
+        memset_func = LLVMAddFunction(module, "memset", memset_type);
+    }
+    LLVMBuildCall2(builder, memset_type, memset_func,
+                   (LLVMValueRef[]){space_start, 
+                                   LLVMConstInt(LLVMInt32Type(), ' ', false),
+                                   n}, 3, "");
+    
+    // Add null terminator
+    LLVMValueRef null_pos = LLVMBuildGEP2(builder, LLVMInt8Type(), result,
+                                          (LLVMValueRef[]){total_len}, 1, "null_pos");
+    LLVMBuildStore(builder, LLVMConstInt(LLVMInt8Type(), 0, false), null_pos);
+    
     return result;
 }
 
-// Replace your codegen_expression function with this fixed version:
+// Helper to remove ALL occurrences of substring from string
+static LLVMValueRef codegen_strremove_all(LLVMBuilderRef builder, LLVMModuleRef module,
+                                          LLVMValueRef str, LLVMValueRef substr) {
+    // Get lengths
+    LLVMValueRef str_len = codegen_strlen(builder, module, str);
+    LLVMValueRef substr_len = codegen_strlen(builder, module, substr);
+    
+    // Allocate result buffer (worst case: same size as original)
+    LLVMValueRef alloc_size = LLVMBuildAdd(builder, str_len, 
+                                           LLVMConstInt(LLVMInt64Type(), 1, false), "alloc");
+    
+    LLVMTypeRef malloc_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMInt64Type()}, 1, false);
+    LLVMValueRef malloc_func = LLVMGetNamedFunction(module, "malloc");
+    if (!malloc_func) {
+        malloc_func = LLVMAddFunction(module, "malloc", malloc_type);
+    }
+    LLVMValueRef result = LLVMBuildCall2(builder, malloc_type, malloc_func,
+                                         (LLVMValueRef[]){alloc_size}, 1, "str_result");
+    
+    // Initialize result position
+    LLVMValueRef result_pos_ptr = LLVMBuildAlloca(builder, LLVMPointerType(LLVMInt8Type(), 0), "result_pos");
+    LLVMBuildStore(builder, result, result_pos_ptr);
+    
+    // Initialize source position
+    LLVMValueRef src_pos_ptr = LLVMBuildAlloca(builder, LLVMPointerType(LLVMInt8Type(), 0), "src_pos");
+    LLVMBuildStore(builder, str, src_pos_ptr);
+    
+    // Declare strstr
+    LLVMTypeRef strstr_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+    LLVMValueRef strstr_func = LLVMGetNamedFunction(module, "strstr");
+    if (!strstr_func) {
+        strstr_func = LLVMAddFunction(module, "strstr", strstr_type);
+    }
+    
+    // Create loop blocks
+    LLVMValueRef func = LLVMGetBasicBlockParent(LLVMGetInsertBlock(builder));
+    LLVMBasicBlockRef loop_start = LLVMAppendBasicBlock(func, "loop_start");
+    LLVMBasicBlockRef found_block = LLVMAppendBasicBlock(func, "found");
+    LLVMBasicBlockRef not_found_block = LLVMAppendBasicBlock(func, "not_found");
+    LLVMBasicBlockRef merge_block = LLVMAppendBasicBlock(func, "merge");
+    
+    LLVMBuildBr(builder, loop_start);
+    
+    // Loop start: find next occurrence
+    LLVMPositionBuilderAtEnd(builder, loop_start);
+    LLVMValueRef src_pos = LLVMBuildLoad2(builder, LLVMPointerType(LLVMInt8Type(), 0), 
+                                          src_pos_ptr, "src_pos");
+    LLVMValueRef found = LLVMBuildCall2(builder, strstr_type, strstr_func,
+                                        (LLVMValueRef[]){src_pos, substr}, 2, "found");
+    
+    LLVMValueRef null_ptr = LLVMConstNull(LLVMPointerType(LLVMInt8Type(), 0));
+    LLVMValueRef is_found = LLVMBuildICmp(builder, LLVMIntNE, found, null_ptr, "is_found");
+    LLVMBuildCondBr(builder, is_found, found_block, not_found_block);
+    
+    // Found block: copy part before match, skip match, continue
+    LLVMPositionBuilderAtEnd(builder, found_block);
+    
+    // Calculate how many bytes to copy before the match
+    LLVMValueRef copy_len = LLVMBuildPtrDiff2(builder, LLVMInt8Type(), found, src_pos, "copy_len");
+    
+    // Use memcpy to copy bytes before match
+    LLVMTypeRef memcpy_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMInt64Type()}, 3, false);
+    LLVMValueRef memcpy_func = LLVMGetNamedFunction(module, "memcpy");
+    if (!memcpy_func) {
+        memcpy_func = LLVMAddFunction(module, "memcpy", memcpy_type);
+    }
+    
+    LLVMValueRef result_pos = LLVMBuildLoad2(builder, LLVMPointerType(LLVMInt8Type(), 0),
+                                             result_pos_ptr, "result_pos");
+    LLVMBuildCall2(builder, memcpy_type, memcpy_func,
+                   (LLVMValueRef[]){result_pos, src_pos, copy_len}, 3, "");
+    
+    // Update result position
+    LLVMValueRef new_result_pos = LLVMBuildGEP2(builder, LLVMInt8Type(), result_pos,
+                                                (LLVMValueRef[]){copy_len}, 1, "new_result_pos");
+    LLVMBuildStore(builder, new_result_pos, result_pos_ptr);
+    
+    // Update source position (skip the matched substring)
+    LLVMValueRef new_src_pos = LLVMBuildGEP2(builder, LLVMInt8Type(), found,
+                                             (LLVMValueRef[]){substr_len}, 1, "new_src_pos");
+    LLVMBuildStore(builder, new_src_pos, src_pos_ptr);
+    
+    // Continue loop
+    LLVMBuildBr(builder, loop_start);
+    
+    // Not found block: copy remaining string and exit
+    LLVMPositionBuilderAtEnd(builder, not_found_block);
+    
+    LLVMValueRef final_result_pos = LLVMBuildLoad2(builder, LLVMPointerType(LLVMInt8Type(), 0),
+                                                   result_pos_ptr, "final_result_pos");
+    LLVMValueRef final_src_pos = LLVMBuildLoad2(builder, LLVMPointerType(LLVMInt8Type(), 0),
+                                                src_pos_ptr, "final_src_pos");
+    
+    LLVMTypeRef strcpy_type = LLVMFunctionType(LLVMPointerType(LLVMInt8Type(), 0),
+                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
+                                                               LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
+    LLVMValueRef strcpy_func = LLVMGetNamedFunction(module, "strcpy");
+    if (!strcpy_func) {
+        strcpy_func = LLVMAddFunction(module, "strcpy", strcpy_type);
+    }
+    LLVMBuildCall2(builder, strcpy_type, strcpy_func,
+                   (LLVMValueRef[]){final_result_pos, final_src_pos}, 2, "");
+    
+    LLVMBuildBr(builder, merge_block);
+    
+    // Merge block
+    LLVMPositionBuilderAtEnd(builder, merge_block);
+    
+    return result;
+}
 
 static LLVMValueRef codegen_expression(ASTNode *expr, LLVMBuilderRef builder,
                                        LLVMModuleRef module, const char *expected_type) {
+    // Handle literals
     if (expr->type == AST_LITERAL) {
-        // It's a literal
         const char *type = expr->literal.type;
         const char *value = expr->literal.value;
         
@@ -1390,31 +1638,62 @@ static LLVMValueRef codegen_expression(ASTNode *expr, LLVMBuilderRef builder,
         } else if (strcmp(type, "bool") == 0) {
             return LLVMConstInt(LLVMInt1Type(), atoi(value), false);
         }
-    } else if (expr->type == AST_BINARY_OP) {
-        // Binary operation
-        LLVMValueRef left = codegen_expression(expr->binary.left, builder, module, expected_type);
-        LLVMValueRef right = codegen_expression(expr->binary.right, builder, module, expected_type);
-        
+    }
+    
+    // Handle binary operations
+    if (expr->type == AST_BINARY_OP) {
         const char *left_type = get_expr_type(expr->binary.left);
         const char *right_type = get_expr_type(expr->binary.right);
         
-        // String operations (handle both literal strings and computed strings)
-        if ((strcmp(left_type, "string") == 0 || strcmp(left_type, "computed") == 0) &&
+        // Special case: string * int or int * string (repeat)
+        if ((strcmp(left_type, "string") == 0 && strcmp(right_type, "int") == 0) ||
+            (strcmp(left_type, "int") == 0 && strcmp(right_type, "string") == 0)) {
+            if (expr->binary.op == OP_MUL) {
+                LLVMValueRef str_val, int_val;
+                if (strcmp(left_type, "string") == 0) {
+                    str_val = codegen_expression(expr->binary.left, builder, module, expected_type);
+                    int_val = codegen_expression(expr->binary.right, builder, module, "i64");
+                } else {
+                    int_val = codegen_expression(expr->binary.left, builder, module, "i64");
+                    str_val = codegen_expression(expr->binary.right, builder, module, expected_type);
+                }
+                return codegen_strrepeat(builder, module, str_val, int_val);
+            }
+        }
+        
+        // Special case: string + int (add spaces) or string - int (trim)
+        if (strcmp(left_type, "string") == 0 && strcmp(right_type, "int") == 0) {
+            LLVMValueRef str_val = codegen_expression(expr->binary.left, builder, module, expected_type);
+            LLVMValueRef int_val = codegen_expression(expr->binary.right, builder, module, "i64");
+            
+            if (expr->binary.op == OP_ADD) {
+                return codegen_strpad(builder, module, str_val, int_val);
+            } else if (expr->binary.op == OP_SUB) {
+                return codegen_strtrim(builder, module, str_val, int_val);
+            }
+        }
+        
+        // Recursively evaluate left and right operands
+        LLVMValueRef left = codegen_expression(expr->binary.left, builder, module, expected_type);
+        LLVMValueRef right = codegen_expression(expr->binary.right, builder, module, expected_type);
+        
+        // Determine if we're dealing with strings
+        LLVMTypeRef left_llvm_type = LLVMTypeOf(left);
+        LLVMTypeRef right_llvm_type = LLVMTypeOf(right);
+        bool left_is_ptr = LLVMGetTypeKind(left_llvm_type) == LLVMPointerTypeKind;
+        bool right_is_ptr = LLVMGetTypeKind(right_llvm_type) == LLVMPointerTypeKind;
+        
+        // String operations
+        if (left_is_ptr && right_is_ptr && 
+            (strcmp(left_type, "string") == 0 || strcmp(left_type, "computed") == 0) &&
             (strcmp(right_type, "string") == 0 || strcmp(right_type, "computed") == 0)) {
-            // Check if either operand is actually a string by checking the LLVM type
-            LLVMTypeRef left_llvm_type = LLVMTypeOf(left);
-            LLVMTypeRef right_llvm_type = LLVMTypeOf(right);
             
-            bool left_is_ptr = LLVMGetTypeKind(left_llvm_type) == LLVMPointerTypeKind;
-            bool right_is_ptr = LLVMGetTypeKind(right_llvm_type) == LLVMPointerTypeKind;
-            
-            if (left_is_ptr && right_is_ptr) {
-                if (expr->binary.op == OP_ADD) {
+            switch (expr->binary.op) {
+                case OP_ADD:
                     return codegen_strcat(builder, module, left, right);
-                } else if (expr->binary.op == OP_SUB) {
-                    return codegen_strremove(builder, module, left, right);
-                } else if (expr->binary.op == OP_EQ) {
-                    // strcmp returns 0 if equal
+                case OP_SUB:
+                    return codegen_strremove_all(builder, module, left, right);
+                case OP_EQ: {
                     LLVMTypeRef strcmp_type = LLVMFunctionType(LLVMInt32Type(),
                                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
                                                                                LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
@@ -1426,7 +1705,8 @@ static LLVMValueRef codegen_expression(ASTNode *expr, LLVMBuilderRef builder,
                                                              (LLVMValueRef[]){left, right}, 2, "strcmp");
                     return LLVMBuildICmp(builder, LLVMIntEQ, cmp_result,
                                          LLVMConstInt(LLVMInt32Type(), 0, false), "streq");
-                } else if (expr->binary.op == OP_NE) {
+                }
+                case OP_NE: {
                     LLVMTypeRef strcmp_type = LLVMFunctionType(LLVMInt32Type(),
                                                                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8Type(), 0),
                                                                                LLVMPointerType(LLVMInt8Type(), 0)}, 2, false);
@@ -1438,68 +1718,106 @@ static LLVMValueRef codegen_expression(ASTNode *expr, LLVMBuilderRef builder,
                                                              (LLVMValueRef[]){left, right}, 2, "strcmp");
                     return LLVMBuildICmp(builder, LLVMIntNE, cmp_result,
                                          LLVMConstInt(LLVMInt32Type(), 0, false), "strne");
-                } else if (expr->binary.op == OP_LT || expr->binary.op == OP_LE ||
-                           expr->binary.op == OP_GT || expr->binary.op == OP_GE) {
+                }
+                case OP_LT:
+                case OP_LE:
+                case OP_GT:
+                case OP_GE: {
                     // Compare string lengths
                     LLVMValueRef len1 = codegen_strlen(builder, module, left);
                     LLVMValueRef len2 = codegen_strlen(builder, module, right);
-                
+                    
                     switch (expr->binary.op) {
-                    case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, len1, len2, "cmp");
-                    case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, len1, len2, "cmp");
-                    case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, len1, len2, "cmp");
-                    case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, len1, len2, "cmp");
-                    default: break;
+                        case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, len1, len2, "cmp");
+                        case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, len1, len2, "cmp");
+                        case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, len1, len2, "cmp");
+                        case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, len1, len2, "cmp");
+                        default: break;
                     }
                 }
+                default:
+                    break;
             }
         }
         
-        // Character operations (treat as integers)
-        if (strcmp(left_type, "char") == 0 && strcmp(right_type, "char") == 0) {
-            switch (expr->binary.op) {
-            case OP_ADD: return LLVMBuildAdd(builder, left, right, "add");
-            case OP_SUB: return LLVMBuildSub(builder, left, right, "sub");
-            case OP_MUL: return LLVMBuildMul(builder, left, right, "mul");
-            case OP_DIV: return LLVMBuildUDiv(builder, left, right, "div");
-            case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
-            case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
-            case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, left, right, "lt");
-            case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, left, right, "le");
-            case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, left, right, "gt");
-            case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, left, right, "ge");
-            }
-        }
+        // Determine operation type category
+        bool is_float_op = (strcmp(left_type, "float") == 0 || strcmp(right_type, "float") == 0);
+        bool is_bool_op = (strcmp(left_type, "bool") == 0 && strcmp(right_type, "bool") == 0);
+        bool is_char_op = (strcmp(left_type, "char") == 0 && strcmp(right_type, "char") == 0);
+        bool is_mixed_bool_int = ((strcmp(left_type, "bool") == 0 && strcmp(right_type, "int") == 0) ||
+                                  (strcmp(left_type, "int") == 0 && strcmp(right_type, "bool") == 0));
         
         // Boolean operations
-        if (strcmp(left_type, "bool") == 0 && strcmp(right_type, "bool") == 0) {
+        if (is_bool_op) {
             switch (expr->binary.op) {
-            case OP_ADD: return LLVMBuildOr(builder, left, right, "or");  // true + false = true
-            case OP_SUB: return LLVMBuildAnd(builder, left, 
-                                             LLVMBuildNot(builder, right, "not"), "and_not");
-            case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
-            case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
-            case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, left, right, "lt");
-            case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, left, right, "le");
-            case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, left, right, "gt");
-            case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, left, right, "ge");
-            default: break;
+                case OP_ADD: return LLVMBuildOr(builder, left, right, "or");
+                case OP_SUB: return LLVMBuildAnd(builder, left, LLVMBuildNot(builder, right, "not"), "and_not");
+                case OP_MUL: return LLVMBuildAnd(builder, left, right, "and");
+                case OP_DIV: return LLVMBuildAnd(builder, left, right, "div");
+                case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
+                case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
+                case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, left, right, "lt");
+                case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, left, right, "le");
+                case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, left, right, "gt");
+                case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, left, right, "ge");
+            }
+        }
+        
+        // Mixed bool/int operations
+        if (is_mixed_bool_int) {
+            LLVMValueRef left_i32, right_i32;
+            
+            if (strcmp(left_type, "bool") == 0) {
+                left_i32 = LLVMBuildZExt(builder, left, LLVMInt32Type(), "bool_to_i32");
+                right_i32 = right;
+            } else {
+                left_i32 = left;
+                right_i32 = LLVMBuildZExt(builder, right, LLVMInt32Type(), "bool_to_i32");
+            }
+            
+            switch (expr->binary.op) {
+                case OP_ADD: return LLVMBuildAdd(builder, left_i32, right_i32, "add");
+                case OP_SUB: return LLVMBuildSub(builder, left_i32, right_i32, "sub");
+                case OP_MUL: return LLVMBuildMul(builder, left_i32, right_i32, "mul");
+                case OP_DIV: return LLVMBuildSDiv(builder, left_i32, right_i32, "div");
+                case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left_i32, right_i32, "eq");
+                case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left_i32, right_i32, "ne");
+                case OP_LT: return LLVMBuildICmp(builder, LLVMIntSLT, left_i32, right_i32, "lt");
+                case OP_LE: return LLVMBuildICmp(builder, LLVMIntSLE, left_i32, right_i32, "le");
+                case OP_GT: return LLVMBuildICmp(builder, LLVMIntSGT, left_i32, right_i32, "gt");
+                case OP_GE: return LLVMBuildICmp(builder, LLVMIntSGE, left_i32, right_i32, "ge");
+            }
+        }
+        
+        // Character operations (treat as unsigned integers)
+        if (is_char_op) {
+            switch (expr->binary.op) {
+                case OP_ADD: return LLVMBuildAdd(builder, left, right, "add");
+                case OP_SUB: return LLVMBuildSub(builder, left, right, "sub");
+                case OP_MUL: return LLVMBuildMul(builder, left, right, "mul");
+                case OP_DIV: return LLVMBuildUDiv(builder, left, right, "div");
+                case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
+                case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
+                case OP_LT: return LLVMBuildICmp(builder, LLVMIntULT, left, right, "lt");
+                case OP_LE: return LLVMBuildICmp(builder, LLVMIntULE, left, right, "le");
+                case OP_GT: return LLVMBuildICmp(builder, LLVMIntUGT, left, right, "gt");
+                case OP_GE: return LLVMBuildICmp(builder, LLVMIntUGE, left, right, "ge");
             }
         }
         
         // Float operations
-        if (strcmp(left_type, "float") == 0 || strcmp(right_type, "float") == 0) {
+        if (is_float_op) {
             switch (expr->binary.op) {
-            case OP_ADD: return LLVMBuildFAdd(builder, left, right, "add");
-            case OP_SUB: return LLVMBuildFSub(builder, left, right, "sub");
-            case OP_MUL: return LLVMBuildFMul(builder, left, right, "mul");
-            case OP_DIV: return LLVMBuildFDiv(builder, left, right, "div");
-            case OP_EQ: return LLVMBuildFCmp(builder, LLVMRealOEQ, left, right, "eq");
-            case OP_NE: return LLVMBuildFCmp(builder, LLVMRealONE, left, right, "ne");
-            case OP_LT: return LLVMBuildFCmp(builder, LLVMRealOLT, left, right, "lt");
-            case OP_LE: return LLVMBuildFCmp(builder, LLVMRealOLE, left, right, "le");
-            case OP_GT: return LLVMBuildFCmp(builder, LLVMRealOGT, left, right, "gt");
-            case OP_GE: return LLVMBuildFCmp(builder, LLVMRealOGE, left, right, "ge");
+                case OP_ADD: return LLVMBuildFAdd(builder, left, right, "add");
+                case OP_SUB: return LLVMBuildFSub(builder, left, right, "sub");
+                case OP_MUL: return LLVMBuildFMul(builder, left, right, "mul");
+                case OP_DIV: return LLVMBuildFDiv(builder, left, right, "div");
+                case OP_EQ: return LLVMBuildFCmp(builder, LLVMRealOEQ, left, right, "eq");
+                case OP_NE: return LLVMBuildFCmp(builder, LLVMRealONE, left, right, "ne");
+                case OP_LT: return LLVMBuildFCmp(builder, LLVMRealOLT, left, right, "lt");
+                case OP_LE: return LLVMBuildFCmp(builder, LLVMRealOLE, left, right, "le");
+                case OP_GT: return LLVMBuildFCmp(builder, LLVMRealOGT, left, right, "gt");
+                case OP_GE: return LLVMBuildFCmp(builder, LLVMRealOGE, left, right, "ge");
             }
         }
         
@@ -1510,32 +1828,31 @@ static LLVMValueRef codegen_expression(ASTNode *expr, LLVMBuilderRef builder,
         }
         
         switch (expr->binary.op) {
-        case OP_ADD: return LLVMBuildAdd(builder, left, right, "add");
-        case OP_SUB: return LLVMBuildSub(builder, left, right, "sub");
-        case OP_MUL: return LLVMBuildMul(builder, left, right, "mul");
-        case OP_DIV: 
-            return is_signed ? LLVMBuildSDiv(builder, left, right, "div") :
-                               LLVMBuildUDiv(builder, left, right, "div");
-        case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
-        case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
-        case OP_LT: 
-            return LLVMBuildICmp(builder, is_signed ? LLVMIntSLT : LLVMIntULT, 
-                                 left, right, "lt");
-        case OP_LE: 
-            return LLVMBuildICmp(builder, is_signed ? LLVMIntSLE : LLVMIntULE, 
-                                 left, right, "le");
-        case OP_GT: 
-            return LLVMBuildICmp(builder, is_signed ? LLVMIntSGT : LLVMIntUGT, 
-                                 left, right, "gt");
-        case OP_GE: 
-            return LLVMBuildICmp(builder, is_signed ? LLVMIntSGE : LLVMIntUGE, 
-                                 left, right, "ge");
+            case OP_ADD: return LLVMBuildAdd(builder, left, right, "add");
+            case OP_SUB: return LLVMBuildSub(builder, left, right, "sub");
+            case OP_MUL: return LLVMBuildMul(builder, left, right, "mul");
+            case OP_DIV: 
+                return is_signed ? LLVMBuildSDiv(builder, left, right, "div") :
+                                   LLVMBuildUDiv(builder, left, right, "div");
+            case OP_EQ: return LLVMBuildICmp(builder, LLVMIntEQ, left, right, "eq");
+            case OP_NE: return LLVMBuildICmp(builder, LLVMIntNE, left, right, "ne");
+            case OP_LT: 
+                return LLVMBuildICmp(builder, is_signed ? LLVMIntSLT : LLVMIntULT, 
+                                     left, right, "lt");
+            case OP_LE: 
+                return LLVMBuildICmp(builder, is_signed ? LLVMIntSLE : LLVMIntULE, 
+                                     left, right, "le");
+            case OP_GT: 
+                return LLVMBuildICmp(builder, is_signed ? LLVMIntSGT : LLVMIntUGT, 
+                                     left, right, "gt");
+            case OP_GE: 
+                return LLVMBuildICmp(builder, is_signed ? LLVMIntSGE : LLVMIntUGE, 
+                                     left, right, "ge");
         }
     }
     
     return NULL;
 }
-
 
 static void codegen_statement(ASTNode *stmt, LLVMBuilderRef builder,
                               LLVMModuleRef module,

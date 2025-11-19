@@ -94,10 +94,6 @@ defn test27 :: char {
     return 'a'
 }
 
-; defn test28 :: str {
-;     return "Return strings!"
-; }
-
 defn test28 :: str {
     return "Return " + "concatenated " + "strings!"
 }
@@ -201,7 +197,7 @@ defn test-float-add :: f32 {
 }
 
 ;; TODO output: 0x401D333340000000 should be: 0x40E9999A00000000
-;; It should not use f64 precision if the return type is f32
+;;It should not use f64 precision if the return type is f32
 defn test-float-sub :: f32 {
     return 10.5 - 3.2
 }
@@ -327,15 +323,13 @@ defn test-bool-sub-ff :: bool {
     return false - false  ; false AND NOT false = false
 }
 
-;; TODO
-; defn test-bool-mult-int :: bool {
-;     return false * 3
-; }
+defn test-bool-mult-int :: i32 {
+    return false * 3
+}
 
-;; TODO
-; defn test-bool-div-int :: bool {
-;     return false * 3
-; }
+defn test-bool-div-int :: i32 {
+    return true / 1
+}
 
 
 ;;; BOOLEAN COMPARISON TESTS
@@ -377,7 +371,7 @@ defn test-bool-ge :: bool {
 ;;; STRING OPERATIONS TESTS
 
 
-;; TODO This should be done entirely at comptime
+;; NOTE This could be done entirely at comptime
 defn test-string-concat-2 :: str {
     return "Hello" + " World"
 }
@@ -390,24 +384,26 @@ defn test-string-concat-4 :: str {
     return "A" + "B" + "C" + "D"
 }
 
-;; FIXME Doesn’t work at all. And should be at comptime
+;; FIXME remove only first occurance. And should be at comptime
 defn test-string-remove :: str {
     return "HelloWorldHello" - "Hello"
 }
 
-;; TODO We should remove 3 characters from the end of the string
-defn test-string-int :: str {
-    return "HelloWorldHello" - 3
+defn test-string-remove-int :: str {
+    return "Hello" - 3
 }
 
-;; TODO We should support * operator between string and int
-;; this should become "HelloHelloHello"
-; defn test-string-mult-string :: str {
-;     return "Hello" * 3
-; }
+defn test-string-add-int :: str {
+    return "Hello" + 3
+}
+
+defn test-string-mult-string :: str {
+    return "Hello " * 3
+}
 
 
 ;;; STRING COMPARISON TESTS
+
 
 ;; NOTE We could use the same string constant
 ;; for both operands (string pooling).
@@ -461,34 +457,24 @@ defn test-precedence-3 :: i32 {
     return 20 / 4 + 3 * 2  ; Should be 11
 }
 
-;; FIXME It’s applying > before + (3 > 6) => false
 defn test-precedence-4 :: bool {
-    return 5 + 3 > 6  ; Should be true (8 > 6)
-}
-
-defn test-precedence-5 :: bool {
     return 10 - 5 == 5  ; Should be true
 }
 
-;; FIXME It’s applying < before - (6 < 10) => false
+;; FIXME It’s (probably) applying > before + (3 > 6) => false
+defn test-precedence-5 :: bool {
+    return 5 + 3 > 6  ; Should be true (8 > 6)
+}
+
+;; FIXME It’s (probably) applying < before - (6 < 10) => false
 defn test-precedence-6 :: bool {
     return 2 * 3 < 10 - 3  ; Should be true (6 < 7)
 }
 
 
-
-
-
-
-
-
-
-
-
-
 defn greet-user :: void {
   "Greet the user."
-    display test28
+    display test-string-add-int
 }
 
 
