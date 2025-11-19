@@ -6,7 +6,7 @@
 
 **A statically-typed language where types know their limits and makes the machine bend to your will.**
 
-[Getting Started](#your-first-ritual) • [Grammar Diagram](./diagram.xhtml) • [Type System](#types-that-know-their-boundaries) • [Operators](#the-hierarchy-of-operations)
+[Getting Started](#your-first-ritual) • [Grammar Diagram](https://laluxx.github.io/glyth/diagram.xhtml) • [Type System](#types-that-know-their-boundaries) • [Operators](#the-hierarchy-of-operations)
 
 ![Supports LLVM](https://img.shields.io/badge/LLVM-Powered-orange?style=flat-square)
 ![Language](https://img.shields.io/badge/Language-C-blue?style=flat-square)
@@ -37,7 +37,7 @@ Every numeric type has well-defined boundaries. Cross them and the compiler stop
 
 Built with LLVM-C API for code generation, Glyth produces native executables with full optimization support.
 
-**[Explore the interactive grammar diagram →](./diagram.xhtml)**
+**[Explore the interactive grammar diagram →](https://laluxx.github.io/glyth/diagram.xhtml)**
 
 ---
 
@@ -86,6 +86,7 @@ Hello, Mortal!
 | `--emit-ir`  | See the LLVM IR (.ll file)            |
 | `--emit-bc`  | Get LLVM bitcode (.bc file)           |
 | `--emit-all` | Emit IR, bitcode, AND executable      |
+| `--/version` | Print version number and exit         |
 
 ---
 
@@ -433,6 +434,36 @@ Each precedence level is a parsing function. Higher precedence = deeper in recur
 Result: `(5 + 3) > 6` → `8 > 6` → `true`
 
 ---
+
+
+## Planned Features
+
+### Pattern Matching
+```haskell
+-- Explicit matching
+
+defn lastInArray :: [a] -> a {
+  match [a] {
+    [] = error "No end for empty array"
+    [x] = x
+    [_:tail] = lastInArray tail
+  }
+}
+
+-- Or Implicit
+defn lastInList :: (a) -> a {
+  () = error "No end for empty list"
+  (x) = x
+  (_:tail) = lastInList tail
+}
+```
+
+### REPL
+```bash
+glyth repl              # Clean REPL
+glyth repl a.out        # Load compiled binary's symbols
+glyth -r src.glth       # enter repl after compiling so we still have all the informations about the program like function names etc..
+```
 
 ## Contributing
 

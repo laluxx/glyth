@@ -2055,6 +2055,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  --emit-ir    Emit LLVM IR (.ll file)\n");
     fprintf(stderr, "  --emit-bc    Emit LLVM bitcode (.bc file)\n");
     fprintf(stderr, "  --emit-all   Emit both IR and bitcode\n");
+    fprintf(stderr, "  --/version   Print version number and exit\n");
 }
 
 int main(int argc, char **argv) {
@@ -2081,6 +2082,9 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--emit-all") == 0) {
             opts.emit_ir = true;
             opts.emit_bc = true;
+        } else if (strcmp(argv[i], "version") == 0 || strcmp(argv[i], "--version") == 0) {
+            fprintf(stderr, "0.0.1\n");
+            return 0;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
             print_usage(argv[0]);
