@@ -4,7 +4,7 @@
 
 <img src="./logo.svg" alt="Glyth Logo" width="200"/>
 
-**A statically-typed language where types know their limits and makes the machine bend to your will.**
+**A statically-typed language where types know their limits. Makes the machine bend to your will.**
 
 [Getting Started](#your-first-ritual) • [Grammar Diagram](https://laluxx.github.io/glyth/diagram.xhtml) • [Type System](#types-that-know-their-boundaries) • [Operators](#the-hierarchy-of-operations)
 
@@ -33,7 +33,7 @@
 
 Glyth is a compiled programming language that channels raw computational power through LLVM. No runtime bloat, no implicit conversions, just explicit types and predictable behavior.
 
-Every numeric type has well-defined boundaries. Cross them and the compiler stops you before the machine does. Operators are overloaded for each type with explicit semantics—same symbols, different rituals for integers, floats, booleans, characters, and strings.
+Every numeric type has well-defined boundaries. Cross them and the compiler stops you before the machine does. Operators are overloaded for each type with explicit semantics—same symbols, different behaviours for integers, floats, booleans, characters, and strings.
 
 Built with LLVM-C API for code generation, Glyth produces native executables with full optimization support.
 
@@ -438,6 +438,24 @@ Result: `(5 + 3) > 6` → `8 > 6` → `true`
 
 ## Planned Features
 
+### Types as sets
+
+u8.cardinality = u8.max + 1 = 256
+i8.cardinality = 256
+
+bool.cardinality = 2
+`display bool` => #{true false}
+`display u8` => #{0..255} NOTE that .. is just to make it short in this file
+`display char` => #{ ..~}
+
+`singleton? set`
+`subset-of? set1 set2`
+`superset-of? set1 set2`
+
+`str.cardinality`  = ∞
+`char.cardinality` = 128 
+
+
 ### Pattern Matching
 ```haskell
 -- Explicit matching
@@ -456,6 +474,36 @@ defn lastInList :: (a) -> a {
   (x) = x
   (_:tail) = lastInList tail
 }
+
+def arr = [1..20]
+
+defn displayArray :: [a] {
+    iter x | i {
+        display "At ~ we have: ~" i x[i]
+        newline
+    }
+}
+
+
+def mut y = 33
+
+defn mutateY! :: void {
+    y => 20
+}
+
+;; Functions that mutate MUST end with !
+defn mutate-any-number! :: n {
+    n => 20
+}
+
+;; Predicate functions MUST end with ?
+defn 20? :: n -> bool {
+    n == 20
+}
+
+
+
+
 ```
 
 ### REPL

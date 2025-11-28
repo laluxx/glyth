@@ -1,9 +1,9 @@
 defn test1 :: u8 {
     return u8.min
-
 }
+
 defn test2 :: u8 {
-    return u8.max
+    return u8.max + 1
 }
 
 defn test3 :: i8 {
@@ -474,21 +474,75 @@ defn test-precedence-6 :: bool {
 
 defn greet-user :: void {
   "Greet the user."
-    display test-string-add-int
+    display test28
 }
 
 
+; defn return-bool :: set {
+;     return bool
+; }
+
+; defn return-set :: set {
+;     return #{1 2 3 4}
+; }
+
+
+
+
 ;; NOTE min and max can’t compile yet
-;; defn max :: a -> a -> a {
-;;     if x <= y then y else x
-;; }
-
-;; defn min :: a -> a -> a {
-;;     if x <= y then x
-;;     else y
-;; }
+; defn max :: a -> a -> a {
+;     if x <= y then y else x
+; }
 
 
+
+
+; defn min :: a -> a -> a {
+;     if x <= y then x
+;     else y
+; }
+
+; def arr = [1..20]
+
+; defn displayArray :: [a] {
+;     iter x | i {
+;         display "At ~ we have: ~" i x[i]
+;         newline
+;     }
+; }
+
+; map fn :: x {x + 1} arr
+
+; map fn {% + 1} arr
+
+
+
+
+;; Int will match any INTEGER:
+;; u8 i8 u16 i16 u32 i32 u64 i64 u128 i128
+;; All these will be accepted
+; defn at :: [a] -> Int -> !a {
+;     match [a] {
+;         [] _ = nothing
+;         [x|xs] n {
+;             n < 0     = nothing
+;             n == 0    = x
+;             otherwise = at xs (n - 1)
+;         }
+;     }
+; }
+
+
+
+defn test-last :: u32 {
+    return 5 - 10
+}
+
+
+
+defn test-return-bool :: bool {
+    return true + false
+}
 
 defn newline :: void {
     display '\n'   
